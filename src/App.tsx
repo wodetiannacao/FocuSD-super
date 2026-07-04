@@ -7,7 +7,17 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { ChevronUp, CircleDot, Minus, RefreshCcw, Sparkles } from "lucide-react";
+import {
+  Check,
+  ChevronUp,
+  CircleDot,
+  ClipboardList,
+  Minus,
+  Play,
+  Plus,
+  RefreshCcw,
+  Trash2,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -15,31 +25,41 @@ export type IslandMode = "collapsed" | "expanded";
 
 type EditorMode = "layout" | null;
 
+type TodoItem = {
+  id: string;
+  title: string;
+  completed: boolean;
+  createdAt: number;
+};
+
 type IslandSettings = {
   opacity: number;
   sizeScale: number;
   marginY: number;
-  glass: boolean;
 };
 
 type IslandShellProps = {
   mode: IslandMode;
   editor: EditorMode;
-  settings: IslandSettings;
+  activeTaskTitle: string | null;
   onToggle: () => void;
   onCollapse: () => void;
   onMinimize: () => void;
   onEditorChange: (editor: EditorMode) => void;
-  onGlassToggle: () => void;
   children: ReactNode;
 };
 
 const STORAGE_KEY = "focusd-island-settings";
+const TODOS_STORAGE_KEY = "focusd-island-todos";
+const ACTIVE_TODO_STORAGE_KEY = "focusd-island-active-todo";
+const BASE_EXPANDED_ISLAND_HEIGHT = 306;
+const TODO_ROW_HEIGHT = 46;
+const TODO_GROW_START_ROWS = 2;
+const TODO_SCROLL_START_ROWS = 6;
 const DEFAULT_SETTINGS: IslandSettings = {
   opacity: 100,
   sizeScale: 1,
   marginY: 12,
-  glass: false,
 };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -69,37 +89,79 @@ function loadSettings(): IslandSettings {
         0,
         160,
       ),
-      glass: Boolean(parsed.glass ?? DEFAULT_SETTINGS.glass),
     };
   } catch {
     return DEFAULT_SETTINGS;
   }
 }
 
+function loadTodos(): TodoItem[] {
+  const stored = window.localStorage.getItem(TODOS_STORAGE_KEY);
+
+  if (!stored) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(stored) as Partial<TodoItem>[];
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((todo) => typeof todo.title === "string" && todo.title.trim())
+      .map((todo) => ({
+        id:
+          typeof todo.id === "string" && todo.id
+            ? todo.id
+            : createTodoId(),
+        title: todo.title?.trim() ?? "",
+        completed: Boolean(todo.completed),
+        createdAt:
+          typeof todo.createdAt === "number" ? todo.createdAt : Date.now(),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function loadActiveTodoId() {
+  return window.localStorage.getItem(ACTIVE_TODO_STORAGE_KEY);
+}
+
+function createTodoId() {
+  if ("crypto" in window && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function IslandShell({
   mode,
   editor,
-  settings,
+  activeTaskTitle,
   onToggle,
   onCollapse,
   onMinimize,
   onEditorChange,
-  onGlassToggle,
   children,
 }: IslandShellProps) {
   const isExpanded = mode === "expanded";
   const className = [
     "island",
     `island--${mode}`,
-    settings.glass ? "island--glass" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+    editor === null ? "island--todo" : "island--editor",
+  ].join(" ");
+  const collapsedLabel = activeTaskTitle
+    ? `正在专注：${activeTaskTitle}`
+    : "FocuSD Island";
 
   return (
     <section
       className={className}
-      aria-label="FocuSD Island"
+      aria-label={collapsedLabel}
       onClick={() => {
         if (!isExpanded) {
           onToggle();
@@ -108,8 +170,17 @@ function IslandShell({
     >
       <div className="island__collapsed" aria-hidden={isExpanded}>
         <span className="island__pulse" />
-        <span className="island__brand">FocuSD</span>
-        <span className="island__status">Ready</span>
+        {activeTaskTitle ? (
+          <>
+            <span className="island__active-task">{activeTaskTitle}</span>
+            <span className="island__status">Focus</span>
+          </>
+        ) : (
+          <>
+            <span className="island__brand">FocuSD</span>
+            <span className="island__status">Ready</span>
+          </>
+        )}
       </div>
 
       <div className="island__expanded" aria-hidden={!isExpanded}>
@@ -135,6 +206,18 @@ function IslandShell({
           >
             <div className="editor-dots" aria-label="岛屿编辑">
               <button
+                className={`dot-button dot-button--todo ${
+                  editor === null ? "dot-button--active" : ""
+                }`}
+                type="button"
+                title="任务清单"
+                aria-label="任务清单"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onEditorChange(null);
+                }}
+              />
+              <button
                 className={`dot-button dot-button--layout ${
                   editor === "layout" ? "dot-button--active" : ""
                 }`}
@@ -144,18 +227,6 @@ function IslandShell({
                 onClick={(event) => {
                   event.stopPropagation();
                   onEditorChange(editor === "layout" ? null : "layout");
-                }}
-              />
-              <button
-                className={`dot-button dot-button--glass ${
-                  settings.glass ? "dot-button--active" : ""
-                }`}
-                type="button"
-                title="毛玻璃暂存"
-                aria-label="毛玻璃暂存"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onGlassToggle();
                 }}
               />
             </div>
@@ -286,22 +357,123 @@ function LayoutEditor({
   );
 }
 
-function IslandPlaceholder() {
+function TodoNotebook({
+  todos,
+  draft,
+  activeTodoId,
+  onDraftChange,
+  onAddTodo,
+  onToggleTodo,
+  onStartTodo,
+  onDeleteTodo,
+}: {
+  todos: TodoItem[];
+  draft: string;
+  activeTodoId: string | null;
+  onDraftChange: (value: string) => void;
+  onAddTodo: () => void;
+  onToggleTodo: (id: string) => void;
+  onStartTodo: (id: string) => void;
+  onDeleteTodo: (id: string) => void;
+}) {
+  const openCount = todos.filter((todo) => !todo.completed).length;
+  const listClassName = [
+    "todo-list",
+    todos.length > TODO_SCROLL_START_ROWS ? "todo-list--scroll" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className="placeholder" aria-label="Island content slot">
-      <div className="placeholder__badge">
-        <Sparkles size={22} strokeWidth={2.1} />
-      </div>
-      <div className="placeholder__copy">
-        <span className="placeholder__eyebrow">Shell online</span>
-        <strong>Module slot</strong>
-      </div>
-      <div className="placeholder__bars" aria-hidden="true">
+    <section className="todo-notebook" aria-label="任务清单">
+      <div className="todo-notebook__spine" aria-hidden="true">
         <span />
         <span />
         <span />
       </div>
-    </div>
+
+      <div className="todo-notebook__topline">
+        <span className="todo-notebook__tab">
+          <ClipboardList size={15} strokeWidth={2.1} />
+          Tasks
+        </span>
+        <span>{openCount} open</span>
+      </div>
+
+      <form
+        className="todo-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onAddTodo();
+        }}
+      >
+        <Plus size={16} strokeWidth={2.2} aria-hidden="true" />
+        <input
+          value={draft}
+          placeholder="Add a task"
+          aria-label="Add a task, press Enter to save"
+          onChange={(event) => onDraftChange(event.currentTarget.value)}
+        />
+      </form>
+
+      <div className={listClassName} role="list">
+        {todos.length === 0 ? (
+          <div className="todo-empty">今天还很轻</div>
+        ) : (
+          todos.map((todo) => {
+            const isActive = todo.id === activeTodoId && !todo.completed;
+
+            return (
+              <div
+                className={[
+                  "todo-item",
+                  todo.completed ? "todo-item--done" : "",
+                  isActive ? "todo-item--active" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={todo.id}
+                role="listitem"
+              >
+                <button
+                  className="todo-check"
+                  type="button"
+                  aria-pressed={todo.completed}
+                  title={todo.completed ? "标记未完成" : "完成"}
+                  aria-label={`${todo.completed ? "标记未完成" : "完成"}：${
+                    todo.title
+                  }`}
+                  onClick={() => onToggleTodo(todo.id)}
+                >
+                  {todo.completed && <Check size={14} strokeWidth={2.5} />}
+                </button>
+                <span className="todo-title">{todo.title}</span>
+                <button
+                  className="todo-start"
+                  type="button"
+                  title="开始"
+                  aria-label={`开始：${todo.title}`}
+                  disabled={todo.completed}
+                  onClick={() => onStartTodo(todo.id)}
+                >
+                  <Play size={13} strokeWidth={2.4} />
+                  <span>开始</span>
+                </button>
+                <button
+                  className="todo-delete"
+                  type="button"
+                  title="删除"
+                  aria-label={`删除：${todo.title}`}
+                  onClick={() => onDeleteTodo(todo.id)}
+                >
+                  <Trash2 size={14} strokeWidth={2.2} />
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -309,6 +481,20 @@ function App() {
   const [mode, setMode] = useState<IslandMode>("collapsed");
   const [editor, setEditor] = useState<EditorMode>(null);
   const [settings, setSettings] = useState<IslandSettings>(loadSettings);
+  const [todos, setTodos] = useState<TodoItem[]>(loadTodos);
+  const [draftTodo, setDraftTodo] = useState("");
+  const [activeTodoId, setActiveTodoId] = useState<string | null>(
+    loadActiveTodoId,
+  );
+  const visibleTodoRows = Math.min(
+    Math.max(todos.length, 1),
+    TODO_SCROLL_START_ROWS,
+  );
+  const expandedIslandHeight =
+    editor === null
+      ? BASE_EXPANDED_ISLAND_HEIGHT +
+        Math.max(0, visibleTodoRows - TODO_GROW_START_ROWS) * TODO_ROW_HEIGHT
+      : BASE_EXPANDED_ISLAND_HEIGHT;
   const layoutSync = useRef<{
     frame: number | null;
     inFlight: boolean;
@@ -326,8 +512,9 @@ function App() {
       ({
         "--island-opacity": settings.opacity / 100,
         "--island-scale": settings.sizeScale,
+        "--expanded-island-height": `${expandedIslandHeight}px`,
       }) as CSSProperties,
-    [settings.opacity, settings.sizeScale],
+    [expandedIslandHeight, settings.opacity, settings.sizeScale],
   );
 
   const syncNativeLayout = useCallback(async (nextSettings: IslandSettings) => {
@@ -384,20 +571,17 @@ function App() {
     [flushNativeLayout],
   );
 
-  const syncNativeGlass = useCallback(async (enabled: boolean) => {
-    try {
-      await invoke("set_glass_effect", { enabled });
-    } catch (error) {
-      console.error("Failed to sync island glass effect", error);
-    }
-  }, []);
-
   const syncNativeInteraction = useCallback(
-    async (nextMode: IslandMode, nextSettings: IslandSettings) => {
+    async (
+      nextMode: IslandMode,
+      nextSettings: IslandSettings,
+      nextExpandedHeight: number,
+    ) => {
       try {
         await invoke("set_island_interaction", {
           mode: nextMode,
           sizeScale: nextSettings.sizeScale,
+          expandedHeight: nextExpandedHeight,
         });
       } catch (error) {
         console.error("Failed to sync island interaction", error);
@@ -430,12 +614,51 @@ function App() {
     setIslandMode("collapsed");
   }, [setIslandMode]);
 
-  const toggleGlass = useCallback(() => {
-    setEditor(null);
-    setSettings((currentSettings) => ({
-      ...currentSettings,
-      glass: !currentSettings.glass,
-    }));
+  const addTodo = useCallback(() => {
+    const title = draftTodo.trim();
+
+    if (!title) {
+      return;
+    }
+
+    setTodos((currentTodos) => [
+      {
+        id: createTodoId(),
+        title,
+        completed: false,
+        createdAt: Date.now(),
+      },
+      ...currentTodos,
+    ]);
+    setDraftTodo("");
+  }, [draftTodo]);
+
+  const toggleTodo = useCallback((id: string) => {
+    setTodos((currentTodos) =>
+      currentTodos.map((todo) =>
+        todo.id === id ? { ...todo, completed: !todo.completed } : todo,
+      ),
+    );
+    setActiveTodoId((currentId) => (currentId === id ? null : currentId));
+  }, []);
+
+  const startTodo = useCallback(
+    (id: string) => {
+      const todo = todos.find((item) => item.id === id);
+
+      if (!todo || todo.completed) {
+        return;
+      }
+
+      setActiveTodoId(id);
+      setIslandMode("collapsed");
+    },
+    [setIslandMode, todos],
+  );
+
+  const deleteTodo = useCallback((id: string) => {
+    setTodos((currentTodos) => currentTodos.filter((todo) => todo.id !== id));
+    setActiveTodoId((currentId) => (currentId === id ? null : currentId));
   }, []);
 
   const resetSettings = useCallback(() => {
@@ -448,16 +671,39 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
+    window.localStorage.setItem(TODOS_STORAGE_KEY, JSON.stringify(todos));
+  }, [todos]);
+
+  useEffect(() => {
+    if (activeTodoId) {
+      window.localStorage.setItem(ACTIVE_TODO_STORAGE_KEY, activeTodoId);
+      return;
+    }
+
+    window.localStorage.removeItem(ACTIVE_TODO_STORAGE_KEY);
+  }, [activeTodoId]);
+
+  useEffect(() => {
+    if (
+      activeTodoId &&
+      !todos.some((todo) => todo.id === activeTodoId && !todo.completed)
+    ) {
+      setActiveTodoId(null);
+    }
+  }, [activeTodoId, todos]);
+
+  useEffect(() => {
     scheduleNativeLayout(settings);
   }, [settings.marginY, scheduleNativeLayout]);
 
   useEffect(() => {
-    void syncNativeInteraction(mode, settings);
-  }, [mode, settings.sizeScale, syncNativeInteraction]);
-
-  useEffect(() => {
-    void syncNativeGlass(settings.glass);
-  }, [settings.glass, syncNativeGlass]);
+    void syncNativeInteraction(mode, settings, expandedIslandHeight);
+  }, [
+    expandedIslandHeight,
+    mode,
+    settings.sizeScale,
+    syncNativeInteraction,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -470,17 +716,24 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [collapseIsland]);
 
+  const activeTaskTitle = useMemo(() => {
+    const activeTodo = todos.find(
+      (todo) => todo.id === activeTodoId && !todo.completed,
+    );
+
+    return activeTodo?.title ?? null;
+  }, [activeTodoId, todos]);
+
   return (
     <main className="stage" style={stageStyle}>
       <IslandShell
         mode={mode}
         editor={editor}
-        settings={settings}
+        activeTaskTitle={activeTaskTitle}
         onToggle={toggleIsland}
         onCollapse={collapseIsland}
         onMinimize={minimizeIsland}
         onEditorChange={setEditor}
-        onGlassToggle={toggleGlass}
       >
         {editor === "layout" && (
           <LayoutEditor
@@ -489,7 +742,18 @@ function App() {
             onReset={resetSettings}
           />
         )}
-        {editor === null && <IslandPlaceholder />}
+        {editor === null && (
+          <TodoNotebook
+            todos={todos}
+            draft={draftTodo}
+            activeTodoId={activeTodoId}
+            onDraftChange={setDraftTodo}
+            onAddTodo={addTodo}
+            onToggleTodo={toggleTodo}
+            onStartTodo={startTodo}
+            onDeleteTodo={deleteTodo}
+          />
+        )}
       </IslandShell>
     </main>
   );

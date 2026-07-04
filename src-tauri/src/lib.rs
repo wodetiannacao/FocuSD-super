@@ -22,8 +22,9 @@ const DEFAULT_SCALE: f64 = 1.0;
 const COLLAPSED_ISLAND_WIDTH: f64 = 320.0;
 const COLLAPSED_ISLAND_HEIGHT: f64 = 58.0;
 const EXPANDED_ISLAND_WIDTH: f64 = 560.0;
-const EXPANDED_ISLAND_HEIGHT: f64 = 306.0;
+const DEFAULT_EXPANDED_ISLAND_HEIGHT: f64 = 306.0;
 const EXPANDED_RADIUS: f64 = 30.0;
+const STAGE_WINDOW_PADDING_Y: f64 = 24.0;
 
 static WINDOW_STATE: OnceLock<Mutex<IslandWindowState>> = OnceLock::new();
 
@@ -42,10 +43,10 @@ impl IslandMode {
         }
     }
 
-    fn base_size(self) -> (f64, f64) {
+    fn base_size(self, expanded_height: f64) -> (f64, f64) {
         match self {
             Self::Collapsed => (COLLAPSED_ISLAND_WIDTH, COLLAPSED_ISLAND_HEIGHT),
-            Self::Expanded => (EXPANDED_ISLAND_WIDTH, EXPANDED_ISLAND_HEIGHT),
+            Self::Expanded => (EXPANDED_ISLAND_WIDTH, expanded_height),
         }
     }
 
@@ -62,6 +63,7 @@ struct IslandWindowState {
     mode: IslandMode,
     size_scale: f64,
     margin_y: f64,
+    expanded_height: f64,
 }
 
 impl Default for IslandWindowState {
@@ -70,6 +72,7 @@ impl Default for IslandWindowState {
             mode: IslandMode::Collapsed,
             size_scale: DEFAULT_SCALE,
             margin_y: DEFAULT_MARGIN_Y,
+            expanded_height: DEFAULT_EXPANDED_ISLAND_HEIGHT,
         }
     }
 }
@@ -93,21 +96,26 @@ fn set_island_layout(app: AppHandle, layout: IslandLayout) -> Result<(), String>
 }
 
 #[tauri::command]
-fn set_island_interaction(mode: String, size_scale: f64) -> Result<(), String> {
+fn set_island_interaction(
+    app: AppHandle,
+    mode: String,
+    size_scale: f64,
+    expanded_height: Option<f64>,
+) -> Result<(), String> {
+    let window = main_window(&app)?;
     let mode = IslandMode::from_value(&mode)?;
-    mutate_window_state(|state| {
+    let state = mutate_window_state(|state| {
         state.mode = mode;
         state.size_scale = size_scale.clamp(0.75, 1.4);
+        if let Some(expanded_height) = expanded_height {
+            state.expanded_height = expanded_height.clamp(
+                DEFAULT_EXPANDED_ISLAND_HEIGHT,
+                DEFAULT_EXPANDED_ISLAND_HEIGHT + 240.0,
+            );
+        }
         *state
     });
-    Ok(())
-}
-
-#[tauri::command]
-fn set_glass_effect(app: AppHandle, _enabled: bool) -> Result<(), String> {
-    let window = main_window(&app)?;
-    let _ = window_vibrancy::clear_acrylic(&window);
-    Ok(())
+    apply_stage_geometry(&window, state)
 }
 
 #[tauri::command]
@@ -150,10 +158,14 @@ fn read_window_state() -> IslandWindowState {
 }
 
 fn apply_stage_geometry(window: &WebviewWindow, state: IslandWindowState) -> Result<(), String> {
+    let (_, base_height) = state.mode.base_size(state.expanded_height);
+    let stage_height =
+        STAGE_WINDOW_HEIGHT.max((base_height * state.size_scale).ceil() + STAGE_WINDOW_PADDING_Y);
+
     window
         .set_size(Size::Logical(LogicalSize::new(
             STAGE_WINDOW_WIDTH,
-            STAGE_WINDOW_HEIGHT,
+            stage_height,
         )))
         .map_err(|error| error.to_string())?;
 
@@ -217,7 +229,7 @@ fn cursor_is_inside_island(window: &WebviewWindow) -> bool {
     let local_x = (cursor.x - window_rect.left) as f64;
     let local_y = (cursor.y - window_rect.top) as f64;
     let state = read_window_state();
-    let (base_width, base_height) = state.mode.base_size();
+    let (base_width, base_height) = state.mode.base_size(state.expanded_height);
     let island_width = base_width * state.size_scale * physical_scale;
     let island_height = base_height * state.size_scale * physical_scale;
     let island_left = (window_width - island_width) / 2.0;
@@ -329,7 +341,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             set_island_layout,
             set_island_interaction,
-            set_glass_effect,
             minimize_island
         ])
         .run(tauri::generate_context!())

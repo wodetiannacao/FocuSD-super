@@ -985,7 +985,6 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
- "window-vibrancy",
  "windows",
 ]
 
