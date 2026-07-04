@@ -1,11 +1,31 @@
+use serde::Deserialize;
+use std::{
+    sync::{Mutex, OnceLock},
+    thread,
+    time::Duration,
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, LogicalSize, Manager, PhysicalPosition, Position, Size, WebviewWindow,
 };
+use windows::Win32::{
+    Foundation::{POINT, RECT},
+    UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect},
+};
 
 const WINDOW_LABEL: &str = "main";
-const TOP_OFFSET: f64 = 12.0;
+const STAGE_WINDOW_WIDTH: f64 = 820.0;
+const STAGE_WINDOW_HEIGHT: f64 = 460.0;
+const DEFAULT_MARGIN_Y: f64 = 12.0;
+const DEFAULT_SCALE: f64 = 1.0;
+const COLLAPSED_ISLAND_WIDTH: f64 = 320.0;
+const COLLAPSED_ISLAND_HEIGHT: f64 = 58.0;
+const EXPANDED_ISLAND_WIDTH: f64 = 560.0;
+const EXPANDED_ISLAND_HEIGHT: f64 = 306.0;
+const EXPANDED_RADIUS: f64 = 30.0;
+
+static WINDOW_STATE: OnceLock<Mutex<IslandWindowState>> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 enum IslandMode {
@@ -22,19 +42,78 @@ impl IslandMode {
         }
     }
 
-    fn logical_size(self) -> (f64, f64) {
+    fn base_size(self) -> (f64, f64) {
         match self {
-            Self::Collapsed => (360.0, 96.0),
-            Self::Expanded => (560.0, 248.0),
+            Self::Collapsed => (COLLAPSED_ISLAND_WIDTH, COLLAPSED_ISLAND_HEIGHT),
+            Self::Expanded => (EXPANDED_ISLAND_WIDTH, EXPANDED_ISLAND_HEIGHT),
+        }
+    }
+
+    fn corner_radius(self) -> f64 {
+        match self {
+            Self::Collapsed => COLLAPSED_ISLAND_HEIGHT / 2.0,
+            Self::Expanded => EXPANDED_RADIUS,
         }
     }
 }
 
+#[derive(Clone, Copy)]
+struct IslandWindowState {
+    mode: IslandMode,
+    size_scale: f64,
+    margin_y: f64,
+}
+
+impl Default for IslandWindowState {
+    fn default() -> Self {
+        Self {
+            mode: IslandMode::Collapsed,
+            size_scale: DEFAULT_SCALE,
+            margin_y: DEFAULT_MARGIN_Y,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IslandLayout {
+    size_scale: f64,
+    margin_y: f64,
+}
+
 #[tauri::command]
-fn set_island_mode(app: AppHandle, mode: String) -> Result<(), String> {
-    let mode = IslandMode::from_value(&mode)?;
+fn set_island_layout(app: AppHandle, layout: IslandLayout) -> Result<(), String> {
     let window = main_window(&app)?;
-    resize_and_position(&window, mode)
+    let state = mutate_window_state(|state| {
+        state.size_scale = layout.size_scale.clamp(0.75, 1.4);
+        state.margin_y = layout.margin_y.clamp(0.0, 160.0);
+        *state
+    });
+    apply_stage_geometry(&window, state)
+}
+
+#[tauri::command]
+fn set_island_interaction(mode: String, size_scale: f64) -> Result<(), String> {
+    let mode = IslandMode::from_value(&mode)?;
+    mutate_window_state(|state| {
+        state.mode = mode;
+        state.size_scale = size_scale.clamp(0.75, 1.4);
+        *state
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn set_glass_effect(app: AppHandle, _enabled: bool) -> Result<(), String> {
+    let window = main_window(&app)?;
+    let _ = window_vibrancy::clear_acrylic(&window);
+    Ok(())
+}
+
+#[tauri::command]
+fn minimize_island(app: AppHandle) -> Result<(), String> {
+    hide_island(&app);
+    Ok(())
 }
 
 fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
@@ -44,8 +123,8 @@ fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
 fn show_island(app: &AppHandle) -> Result<(), String> {
     let window = main_window(app)?;
-    resize_and_position(&window, IslandMode::Collapsed)?;
     window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -55,10 +134,27 @@ fn hide_island(app: &AppHandle) {
     }
 }
 
-fn resize_and_position(window: &WebviewWindow, mode: IslandMode) -> Result<(), String> {
-    let (width, height) = mode.logical_size();
+fn window_state() -> &'static Mutex<IslandWindowState> {
+    WINDOW_STATE.get_or_init(|| Mutex::new(IslandWindowState::default()))
+}
+
+fn mutate_window_state(
+    update: impl FnOnce(&mut IslandWindowState) -> IslandWindowState,
+) -> IslandWindowState {
+    let mut state = window_state().lock().expect("window state poisoned");
+    update(&mut state)
+}
+
+fn read_window_state() -> IslandWindowState {
+    *window_state().lock().expect("window state poisoned")
+}
+
+fn apply_stage_geometry(window: &WebviewWindow, state: IslandWindowState) -> Result<(), String> {
     window
-        .set_size(Size::Logical(LogicalSize::new(width, height)))
+        .set_size(Size::Logical(LogicalSize::new(
+            STAGE_WINDOW_WIDTH,
+            STAGE_WINDOW_HEIGHT,
+        )))
         .map_err(|error| error.to_string())?;
 
     let monitor = window
@@ -72,15 +168,108 @@ fn resize_and_position(window: &WebviewWindow, mode: IslandMode) -> Result<(), S
     let scale = monitor.scale_factor();
     let monitor_position = monitor.position();
     let monitor_size = monitor.size();
-    let physical_width = (width * scale).round() as i32;
-    let physical_top_offset = (TOP_OFFSET * scale).round() as i32;
+    let physical_width = (STAGE_WINDOW_WIDTH * scale).round() as i32;
+    let physical_top_offset = (state.margin_y * scale).round() as i32;
     let x = monitor_position.x + ((monitor_size.width as i32 - physical_width) / 2);
     let y = monitor_position.y + physical_top_offset;
 
     window
         .set_position(Position::Physical(PhysicalPosition::new(x, y)))
-        .map_err(|error| error.to_string())?;
-    Ok(())
+        .map_err(|error| error.to_string())
+}
+
+fn start_cursor_passthrough_loop(window: WebviewWindow) {
+    thread::spawn(move || {
+        let mut ignoring_cursor = false;
+
+        loop {
+            let should_ignore = !cursor_is_inside_island(&window);
+
+            if should_ignore != ignoring_cursor {
+                if window.set_ignore_cursor_events(should_ignore).is_ok() {
+                    ignoring_cursor = should_ignore;
+                }
+            }
+
+            thread::sleep(Duration::from_millis(12));
+        }
+    });
+}
+
+fn cursor_is_inside_island(window: &WebviewWindow) -> bool {
+    let hwnd = match window.hwnd() {
+        Ok(hwnd) => hwnd,
+        Err(_) => return true,
+    };
+    let mut window_rect = RECT::default();
+    let mut cursor = POINT::default();
+
+    if unsafe { GetWindowRect(hwnd, &mut window_rect) }.is_err() {
+        return true;
+    }
+
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return true;
+    }
+
+    let window_width = (window_rect.right - window_rect.left).max(1) as f64;
+    let physical_scale = window_width / STAGE_WINDOW_WIDTH;
+    let local_x = (cursor.x - window_rect.left) as f64;
+    let local_y = (cursor.y - window_rect.top) as f64;
+    let state = read_window_state();
+    let (base_width, base_height) = state.mode.base_size();
+    let island_width = base_width * state.size_scale * physical_scale;
+    let island_height = base_height * state.size_scale * physical_scale;
+    let island_left = (window_width - island_width) / 2.0;
+    let island_top = 0.0;
+    let radius = state.mode.corner_radius() * state.size_scale * physical_scale;
+
+    point_in_rounded_rect(
+        local_x,
+        local_y,
+        island_left,
+        island_top,
+        island_width,
+        island_height,
+        radius,
+    )
+}
+
+fn point_in_rounded_rect(
+    x: f64,
+    y: f64,
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+) -> bool {
+    let right = left + width;
+    let bottom = top + height;
+
+    if x < left || x > right || y < top || y > bottom {
+        return false;
+    }
+
+    let radius = radius.min(width / 2.0).min(height / 2.0);
+    let center_x = if x < left + radius {
+        left + radius
+    } else if x > right - radius {
+        right - radius
+    } else {
+        x
+    };
+    let center_y = if y < top + radius {
+        top + radius
+    } else if y > bottom - radius {
+        bottom - radius
+    } else {
+        y
+    };
+    let dx = x - center_x;
+    let dy = y - center_y;
+
+    (dx * dx) + (dy * dy) <= radius * radius
 }
 
 fn build_tray(app: &App) -> tauri::Result<()> {
@@ -126,12 +315,23 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             build_tray(app)?;
+            if let Ok(window) = main_window(app.handle()) {
+                if let Err(error) = apply_stage_geometry(&window, IslandWindowState::default()) {
+                    eprintln!("failed to size and position island window: {error}");
+                }
+                start_cursor_passthrough_loop(window);
+            }
             if let Err(error) = show_island(app.handle()) {
                 eprintln!("failed to show island window: {error}");
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![set_island_mode])
+        .invoke_handler(tauri::generate_handler![
+            set_island_layout,
+            set_island_interaction,
+            set_glass_effect,
+            minimize_island
+        ])
         .run(tauri::generate_context!())
         .expect("error while running FocuSD Island");
 }
