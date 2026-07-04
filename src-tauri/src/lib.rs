@@ -1,5 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
+    fs,
+    path::PathBuf,
     sync::{Mutex, OnceLock},
     thread,
     time::Duration,
@@ -84,6 +86,12 @@ struct IslandLayout {
     margin_y: f64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveTodoMarkdownResult {
+    file_path: String,
+}
+
 #[tauri::command]
 fn set_island_layout(app: AppHandle, layout: IslandLayout) -> Result<(), String> {
     let window = main_window(&app)?;
@@ -122,6 +130,33 @@ fn set_island_interaction(
 fn minimize_island(app: AppHandle) -> Result<(), String> {
     hide_island(&app);
     Ok(())
+}
+
+#[tauri::command]
+fn save_todo_markdown(
+    directory: String,
+    date: String,
+    content: String,
+) -> Result<SaveTodoMarkdownResult, String> {
+    let directory = directory.trim();
+
+    if directory.is_empty() {
+        return Err("Todo save path is empty.".to_string());
+    }
+
+    if !date.chars().all(|ch| ch.is_ascii_digit() || ch == '-') {
+        return Err("Todo date contains invalid filename characters.".to_string());
+    }
+
+    let directory_path = PathBuf::from(directory);
+    fs::create_dir_all(&directory_path).map_err(|error| error.to_string())?;
+
+    let file_path = directory_path.join(format!("{date}.md"));
+    fs::write(&file_path, content).map_err(|error| error.to_string())?;
+
+    Ok(SaveTodoMarkdownResult {
+        file_path: file_path.to_string_lossy().to_string(),
+    })
 }
 
 fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
@@ -341,6 +376,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             set_island_layout,
             set_island_interaction,
+            save_todo_markdown,
             minimize_island
         ])
         .run(tauri::generate_context!())

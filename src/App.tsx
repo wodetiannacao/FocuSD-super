@@ -6,16 +6,19 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type WheelEvent,
 } from "react";
 import {
   Check,
   ChevronUp,
   CircleDot,
   ClipboardList,
+  Columns2,
   Minus,
   Play,
   Plus,
   RefreshCcw,
+  Save,
   Trash2,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -24,12 +27,28 @@ import "./App.css";
 export type IslandMode = "collapsed" | "expanded";
 
 type EditorMode = "layout" | null;
+type TodoPageMode = "today" | "archive" | "review";
+type ArchiveLayout = "cards" | "timeline";
 
 type TodoItem = {
   id: string;
   title: string;
   completed: boolean;
   createdAt: number;
+};
+
+type TodoArchive = {
+  date: string;
+  todos: TodoItem[];
+  savedAt: number;
+  savedToDisk: boolean;
+  filePath?: string;
+};
+
+type SaveState = "idle" | "saving" | "saved" | "needs-path" | "error";
+
+type SaveTodoResult = {
+  filePath: string;
 };
 
 type IslandSettings = {
@@ -52,6 +71,11 @@ type IslandShellProps = {
 const STORAGE_KEY = "focusd-island-settings";
 const TODOS_STORAGE_KEY = "focusd-island-todos";
 const ACTIVE_TODO_STORAGE_KEY = "focusd-island-active-todo";
+const TODO_DATE_STORAGE_KEY = "focusd-island-current-date";
+const TODO_ARCHIVE_STORAGE_KEY = "focusd-island-archives";
+const TODO_SAVE_DIRECTORY_STORAGE_KEY = "focusd-island-save-directory";
+const TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY =
+  "focusd-island-last-saved-signature";
 const BASE_EXPANDED_ISLAND_HEIGHT = 306;
 const TODO_ROW_HEIGHT = 46;
 const TODO_GROW_START_ROWS = 2;
@@ -128,6 +152,85 @@ function loadTodos(): TodoItem[] {
 
 function loadActiveTodoId() {
   return window.localStorage.getItem(ACTIVE_TODO_STORAGE_KEY);
+}
+
+function getLocalDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function loadCurrentTodoDate() {
+  return window.localStorage.getItem(TODO_DATE_STORAGE_KEY) ?? getLocalDateString();
+}
+
+function loadTodoArchives(): TodoArchive[] {
+  const stored = window.localStorage.getItem(TODO_ARCHIVE_STORAGE_KEY);
+
+  if (!stored) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(stored) as Partial<TodoArchive>[];
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((archive) => typeof archive.date === "string" && archive.date)
+      .map((archive) => ({
+        date: archive.date ?? getLocalDateString(),
+        todos: Array.isArray(archive.todos)
+          ? archive.todos
+              .filter(
+                (todo) => typeof todo.title === "string" && todo.title.trim(),
+              )
+              .map((todo) => ({
+                id:
+                  typeof todo.id === "string" && todo.id
+                    ? todo.id
+                    : createTodoId(),
+                title: todo.title?.trim() ?? "",
+                completed: Boolean(todo.completed),
+                createdAt:
+                  typeof todo.createdAt === "number"
+                    ? todo.createdAt
+                    : Date.now(),
+              }))
+          : [],
+        savedAt: typeof archive.savedAt === "number" ? archive.savedAt : 0,
+        savedToDisk: Boolean(archive.savedToDisk),
+        filePath:
+          typeof archive.filePath === "string" ? archive.filePath : undefined,
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  } catch {
+    return [];
+  }
+}
+
+function loadSaveDirectory() {
+  return window.localStorage.getItem(TODO_SAVE_DIRECTORY_STORAGE_KEY) ?? "";
+}
+
+function getTodoSignature(date: string, todos: TodoItem[]) {
+  return JSON.stringify({
+    date,
+    todos: todos.map((todo) => ({
+      title: todo.title,
+      completed: todo.completed,
+    })),
+  });
+}
+
+function formatTodosAsMarkdown(todos: TodoItem[]) {
+  return todos
+    .map((todo) => `- [${todo.completed ? "x" : " "}] ${todo.title}`)
+    .join("\n");
 }
 
 function createTodoId() {
@@ -305,12 +408,18 @@ function SliderControl({
 
 function LayoutEditor({
   settings,
+  saveDirectoryDraft,
   onSettingsChange,
   onReset,
+  onSaveDirectoryDraftChange,
+  onSaveDirectory,
 }: {
   settings: IslandSettings;
+  saveDirectoryDraft: string;
   onSettingsChange: (settings: IslandSettings) => void;
   onReset: () => void;
+  onSaveDirectoryDraftChange: (value: string) => void;
+  onSaveDirectory: () => void;
 }) {
   return (
     <div className="editor-panel">
@@ -353,6 +462,33 @@ function LayoutEditor({
         suffix="px"
         onChange={(marginY) => onSettingsChange({ ...settings, marginY })}
       />
+
+      <div className="save-path-panel">
+        <div className="save-path-panel__header">
+          <span>待办清单保存路径</span>
+        </div>
+        <div className="save-path-row">
+          <label className="save-path-field">
+            <span>文件夹</span>
+            <input
+              value={saveDirectoryDraft}
+              placeholder="D:/Todos"
+              aria-label="待办清单 Markdown 保存文件夹"
+              onChange={(event) =>
+                onSaveDirectoryDraftChange(event.currentTarget.value)
+              }
+            />
+          </label>
+          <button
+            className="save-path-button"
+            type="button"
+            onClick={onSaveDirectory}
+          >
+            <Save size={14} strokeWidth={2.2} />
+            <span>保存</span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -361,119 +497,298 @@ function TodoNotebook({
   todos,
   draft,
   activeTodoId,
+  currentDate,
+  pageMode,
+  archives,
+  archiveLayout,
+  selectedArchive,
+  saveState,
   onDraftChange,
   onAddTodo,
   onToggleTodo,
   onStartTodo,
   onDeleteTodo,
+  onSaveToday,
+  onShowArchive,
+  onShowToday,
+  onArchiveLayoutChange,
+  onSelectArchive,
 }: {
   todos: TodoItem[];
   draft: string;
   activeTodoId: string | null;
+  currentDate: string;
+  pageMode: TodoPageMode;
+  archives: TodoArchive[];
+  archiveLayout: ArchiveLayout;
+  selectedArchive: TodoArchive | null;
+  saveState: SaveState;
   onDraftChange: (value: string) => void;
   onAddTodo: () => void;
   onToggleTodo: (id: string) => void;
   onStartTodo: (id: string) => void;
   onDeleteTodo: (id: string) => void;
+  onSaveToday: () => void;
+  onShowArchive: () => void;
+  onShowToday: () => void;
+  onArchiveLayoutChange: (layout: ArchiveLayout) => void;
+  onSelectArchive: (date: string) => void;
 }) {
-  const openCount = todos.filter((todo) => !todo.completed).length;
+  const displayedTodos = pageMode === "review" ? selectedArchive?.todos ?? [] : todos;
+  const isTodayMode = pageMode === "today";
+  const isArchiveMode = pageMode === "archive";
+  const openCount = displayedTodos.filter((todo) => !todo.completed).length;
   const listClassName = [
     "todo-list",
-    todos.length > TODO_SCROLL_START_ROWS ? "todo-list--scroll" : "",
+    displayedTodos.length > TODO_SCROLL_START_ROWS ? "todo-list--scroll" : "",
   ]
     .filter(Boolean)
     .join(" ");
+  const inputPlaceholder =
+    pageMode === "today"
+      ? `Add a task for ${currentDate}`
+      : "Review your todos";
+  const archiveTitle =
+    archiveLayout === "cards" ? "Notebook cards" : "Two-column timeline";
 
   return (
     <section className="todo-notebook" aria-label="任务清单">
-      <div className="todo-notebook__spine" aria-hidden="true">
-        <span />
-        <span />
-        <span />
+      <div className="todo-notebook__spine">
+        <button
+          className={[
+            "todo-spine-button",
+            "todo-spine-button--today",
+            pageMode === "today" ? "todo-spine-button--active" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          type="button"
+          title="Back to today's todo list"
+          aria-label="Back to today's todo list"
+          onClick={onShowToday}
+        />
+        <button
+          className={[
+            "todo-spine-button",
+            "todo-spine-button--save",
+            saveState === "saved" ? "todo-spine-button--saved" : "",
+            saveState === "saving" ? "todo-spine-button--saving" : "",
+            saveState === "needs-path" || saveState === "error"
+              ? "todo-spine-button--attention"
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          type="button"
+          title="Save today's todo list"
+          aria-label="Save today's todo list as markdown"
+          onClick={onSaveToday}
+        />
+        <button
+          className={[
+            "todo-spine-button",
+            "todo-spine-button--archive",
+            pageMode === "archive" || pageMode === "review"
+              ? "todo-spine-button--active"
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          type="button"
+          title="Review saved todo lists"
+          aria-label="Review saved todo lists"
+          onClick={onShowArchive}
+        />
       </div>
 
       <div className="todo-notebook__topline">
         <span className="todo-notebook__tab">
           <ClipboardList size={15} strokeWidth={2.1} />
-          Tasks
+          {pageMode === "review" ? selectedArchive?.date ?? "Review" : "Tasks"}
         </span>
-        <span>{openCount} open</span>
+        {isArchiveMode ? (
+          <div className="archive-layout-toggle" aria-label={archiveTitle}>
+            <button
+              className={archiveLayout === "cards" ? "archive-layout-toggle--active" : ""}
+              type="button"
+              title="Notebook cards"
+              aria-label="Notebook cards"
+              onClick={() => onArchiveLayoutChange("cards")}
+            >
+              <ClipboardList size={14} strokeWidth={2.1} />
+            </button>
+            <button
+              className={archiveLayout === "timeline" ? "archive-layout-toggle--active" : ""}
+              type="button"
+              title="Two-column timeline"
+              aria-label="Two-column timeline"
+              onClick={() => onArchiveLayoutChange("timeline")}
+            >
+              <Columns2 size={14} strokeWidth={2.1} />
+            </button>
+          </div>
+        ) : (
+          <span>{openCount} open</span>
+        )}
       </div>
 
       <form
         className="todo-form"
         onSubmit={(event) => {
           event.preventDefault();
-          onAddTodo();
+          if (isTodayMode) {
+            onAddTodo();
+          }
         }}
       >
         <Plus size={16} strokeWidth={2.2} aria-hidden="true" />
         <input
           value={draft}
-          placeholder="Add a task"
+          disabled={!isTodayMode}
+          placeholder={inputPlaceholder}
           aria-label="Add a task, press Enter to save"
           onChange={(event) => onDraftChange(event.currentTarget.value)}
         />
       </form>
 
-      <div className={listClassName} role="list">
-        {todos.length === 0 ? (
-          <div className="todo-empty">今天还很轻</div>
-        ) : (
-          todos.map((todo) => {
-            const isActive = todo.id === activeTodoId && !todo.completed;
+      {isArchiveMode ? (
+        <ArchiveBrowser
+          archives={archives}
+          layout={archiveLayout}
+          onSelectArchive={onSelectArchive}
+        />
+      ) : (
+        <div className={listClassName} role="list">
+          {displayedTodos.length === 0 ? (
+            <div className="todo-empty">
+              {pageMode === "review" ? "Nothing was written here" : "今天还很轻"}
+            </div>
+          ) : (
+            displayedTodos.map((todo) => {
+              const isActive =
+                isTodayMode && todo.id === activeTodoId && !todo.completed;
 
-            return (
-              <div
-                className={[
-                  "todo-item",
-                  todo.completed ? "todo-item--done" : "",
-                  isActive ? "todo-item--active" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                key={todo.id}
-                role="listitem"
-              >
-                <button
-                  className="todo-check"
-                  type="button"
-                  aria-pressed={todo.completed}
-                  title={todo.completed ? "标记未完成" : "完成"}
-                  aria-label={`${todo.completed ? "标记未完成" : "完成"}：${
-                    todo.title
-                  }`}
-                  onClick={() => onToggleTodo(todo.id)}
+              return (
+                <div
+                  className={[
+                    "todo-item",
+                    todo.completed ? "todo-item--done" : "",
+                    isActive ? "todo-item--active" : "",
+                    !isTodayMode ? "todo-item--readonly" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={todo.id}
+                  role="listitem"
                 >
-                  {todo.completed && <Check size={14} strokeWidth={2.5} />}
-                </button>
-                <span className="todo-title">{todo.title}</span>
-                <button
-                  className="todo-start"
-                  type="button"
-                  title="开始"
-                  aria-label={`开始：${todo.title}`}
-                  disabled={todo.completed}
-                  onClick={() => onStartTodo(todo.id)}
-                >
-                  <Play size={13} strokeWidth={2.4} />
-                  <span>开始</span>
-                </button>
-                <button
-                  className="todo-delete"
-                  type="button"
-                  title="删除"
-                  aria-label={`删除：${todo.title}`}
-                  onClick={() => onDeleteTodo(todo.id)}
-                >
-                  <Trash2 size={14} strokeWidth={2.2} />
-                </button>
-              </div>
-            );
-          })
-        )}
-      </div>
+                  <button
+                    className="todo-check"
+                    type="button"
+                    aria-pressed={todo.completed}
+                    disabled={!isTodayMode}
+                    title={todo.completed ? "标记未完成" : "完成"}
+                    aria-label={`${todo.completed ? "标记未完成" : "完成"}：${
+                      todo.title
+                    }`}
+                    onClick={() => onToggleTodo(todo.id)}
+                  >
+                    {todo.completed && <Check size={14} strokeWidth={2.5} />}
+                  </button>
+                  <span className="todo-title">{todo.title}</span>
+                  {isTodayMode && (
+                    <>
+                      <button
+                        className="todo-start"
+                        type="button"
+                        title="开始"
+                        aria-label={`开始：${todo.title}`}
+                        disabled={todo.completed}
+                        onClick={() => onStartTodo(todo.id)}
+                      >
+                        <Play size={13} strokeWidth={2.4} />
+                        <span>开始</span>
+                      </button>
+                      <button
+                        className="todo-delete"
+                        type="button"
+                        title="删除"
+                        aria-label={`删除：${todo.title}`}
+                        onClick={() => onDeleteTodo(todo.id)}
+                      >
+                        <Trash2 size={14} strokeWidth={2.2} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
     </section>
+  );
+}
+
+function ArchiveBrowser({
+  archives,
+  layout,
+  onSelectArchive,
+}: {
+  archives: TodoArchive[];
+  layout: ArchiveLayout;
+  onSelectArchive: (date: string) => void;
+}) {
+  const handleHorizontalWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (layout !== "cards") {
+      return;
+    }
+
+    event.currentTarget.scrollLeft += event.deltaY;
+  };
+
+  if (archives.length === 0) {
+    return <div className="todo-empty">No saved lists yet</div>;
+  }
+
+  if (layout === "timeline") {
+    return (
+      <div className="archive-timeline" role="list">
+        {archives.map((archive) => (
+          <button
+            className="archive-timeline__item"
+            key={archive.date}
+            type="button"
+            role="listitem"
+            onClick={() => onSelectArchive(archive.date)}
+          >
+            <span className="archive-timeline__dot" />
+            <span>{archive.date}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="archive-cards" role="list" onWheel={handleHorizontalWheel}>
+      {archives.map((archive) => (
+        <button
+          className="archive-card"
+          key={archive.date}
+          type="button"
+          role="listitem"
+          onClick={() => onSelectArchive(archive.date)}
+        >
+          <strong>{archive.date}</strong>
+          <span>
+            {archive.todos
+              .slice(0, 3)
+              .map((todo) => todo.title)
+              .join(" / ") || "No tasks"}
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -486,8 +801,30 @@ function App() {
   const [activeTodoId, setActiveTodoId] = useState<string | null>(
     loadActiveTodoId,
   );
+  const [currentTodoDate, setCurrentTodoDate] =
+    useState<string>(loadCurrentTodoDate);
+  const [archives, setArchives] = useState<TodoArchive[]>(loadTodoArchives);
+  const [todoPageMode, setTodoPageMode] = useState<TodoPageMode>("today");
+  const [archiveLayout, setArchiveLayout] = useState<ArchiveLayout>("cards");
+  const [selectedArchiveDate, setSelectedArchiveDate] = useState<string | null>(
+    null,
+  );
+  const [saveDirectory, setSaveDirectory] = useState(loadSaveDirectory);
+  const [saveDirectoryDraft, setSaveDirectoryDraft] =
+    useState(loadSaveDirectory);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const didCheckDate = useRef(false);
+  const selectedArchive =
+    archives.find((archive) => archive.date === selectedArchiveDate) ?? null;
   const visibleTodoRows = Math.min(
-    Math.max(todos.length, 1),
+    Math.max(
+      todoPageMode === "archive"
+        ? archives.length
+        : todoPageMode === "review"
+          ? selectedArchive?.todos.length ?? 1
+          : todos.length,
+      1,
+    ),
     TODO_SCROLL_START_ROWS,
   );
   const expandedIslandHeight =
@@ -661,6 +998,134 @@ function App() {
     setActiveTodoId((currentId) => (currentId === id ? null : currentId));
   }, []);
 
+  const upsertArchive = useCallback(
+    (
+      date: string,
+      todoList: TodoItem[],
+      savedToDisk: boolean,
+      filePath?: string,
+    ) => {
+      const archive: TodoArchive = {
+        date,
+        todos: todoList,
+        savedAt: Date.now(),
+        savedToDisk,
+        filePath,
+      };
+
+      setArchives((currentArchives) =>
+        [archive, ...currentArchives.filter((item) => item.date !== date)].sort(
+          (a, b) => b.date.localeCompare(a.date),
+        ),
+      );
+    },
+    [],
+  );
+
+  const saveTodosToDisk = useCallback(
+    async (date: string, todoList: TodoItem[]) => {
+      const directory = saveDirectory.trim();
+
+      if (!directory) {
+        throw new Error("Missing todo save path.");
+      }
+
+      const result = await invoke<SaveTodoResult>("save_todo_markdown", {
+        directory,
+        date,
+        content: formatTodosAsMarkdown(todoList),
+      });
+
+      upsertArchive(date, todoList, true, result.filePath);
+      window.localStorage.setItem(
+        TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY,
+        getTodoSignature(date, todoList),
+      );
+
+      return result;
+    },
+    [saveDirectory, upsertArchive],
+  );
+
+  const saveTodayTodos = useCallback(async () => {
+    if (!saveDirectory.trim()) {
+      setSaveState("needs-path");
+      setEditor("layout");
+      setMode("expanded");
+      return;
+    }
+
+    setSaveState("saving");
+
+    try {
+      await saveTodosToDisk(currentTodoDate, todos);
+      setSaveState("saved");
+      window.setTimeout(() => setSaveState("idle"), 1200);
+    } catch (error) {
+      console.error("Failed to save todo markdown", error);
+      setSaveState("error");
+    }
+  }, [currentTodoDate, saveDirectory, saveTodosToDisk, todos]);
+
+  const saveDirectoryFromEditor = useCallback(() => {
+    const nextDirectory = saveDirectoryDraft.trim();
+
+    setSaveDirectory(nextDirectory);
+    setSaveDirectoryDraft(nextDirectory);
+    setSaveState("idle");
+  }, [saveDirectoryDraft]);
+
+  const showArchive = useCallback(() => {
+    setTodoPageMode("archive");
+    setSelectedArchiveDate(null);
+    setDraftTodo("");
+  }, []);
+
+  const showToday = useCallback(() => {
+    setTodoPageMode("today");
+    setSelectedArchiveDate(null);
+    setDraftTodo("");
+  }, []);
+
+  const selectArchive = useCallback((date: string) => {
+    setSelectedArchiveDate(date);
+    setTodoPageMode("review");
+    setDraftTodo("");
+  }, []);
+
+  const rolloverToToday = useCallback(
+    async (nextDate: string) => {
+      const signature = getTodoSignature(currentTodoDate, todos);
+      const lastSavedSignature = window.localStorage.getItem(
+        TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY,
+      );
+
+      if (todos.length > 0 && signature !== lastSavedSignature) {
+        if (saveDirectory.trim()) {
+          try {
+            await saveTodosToDisk(currentTodoDate, todos);
+          } catch (error) {
+            console.error("Failed to auto-save todo markdown", error);
+            upsertArchive(currentTodoDate, todos, false);
+          }
+        } else {
+          upsertArchive(currentTodoDate, todos, false);
+        }
+      }
+
+      setTodos([]);
+      setActiveTodoId(null);
+      setCurrentTodoDate(nextDate);
+      setTodoPageMode("today");
+      setSelectedArchiveDate(null);
+      window.localStorage.setItem(
+        TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY,
+        getTodoSignature(nextDate, []),
+      );
+    },
+    [currentTodoDate, saveDirectory, saveTodosToDisk, todos, upsertArchive],
+  );
+
   const resetSettings = useCallback(() => {
     setSettings(DEFAULT_SETTINGS);
     scheduleNativeLayout(DEFAULT_SETTINGS);
@@ -673,6 +1138,18 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(TODOS_STORAGE_KEY, JSON.stringify(todos));
   }, [todos]);
+
+  useEffect(() => {
+    window.localStorage.setItem(TODO_DATE_STORAGE_KEY, currentTodoDate);
+  }, [currentTodoDate]);
+
+  useEffect(() => {
+    window.localStorage.setItem(TODO_ARCHIVE_STORAGE_KEY, JSON.stringify(archives));
+  }, [archives]);
+
+  useEffect(() => {
+    window.localStorage.setItem(TODO_SAVE_DIRECTORY_STORAGE_KEY, saveDirectory);
+  }, [saveDirectory]);
 
   useEffect(() => {
     if (activeTodoId) {
@@ -691,6 +1168,32 @@ function App() {
       setActiveTodoId(null);
     }
   }, [activeTodoId, todos]);
+
+  useEffect(() => {
+    if (didCheckDate.current) {
+      return;
+    }
+
+    didCheckDate.current = true;
+    const today = getLocalDateString();
+
+    if (currentTodoDate !== today) {
+      void rolloverToToday(today);
+    }
+  }, [currentTodoDate, rolloverToToday]);
+
+  useEffect(() => {
+    const checkForNewDay = () => {
+      const today = getLocalDateString();
+
+      if (currentTodoDate !== today) {
+        void rolloverToToday(today);
+      }
+    };
+
+    const interval = window.setInterval(checkForNewDay, 30_000);
+    return () => window.clearInterval(interval);
+  }, [currentTodoDate, rolloverToToday]);
 
   useEffect(() => {
     scheduleNativeLayout(settings);
@@ -738,8 +1241,11 @@ function App() {
         {editor === "layout" && (
           <LayoutEditor
             settings={settings}
+            saveDirectoryDraft={saveDirectoryDraft}
             onSettingsChange={setSettings}
             onReset={resetSettings}
+            onSaveDirectoryDraftChange={setSaveDirectoryDraft}
+            onSaveDirectory={saveDirectoryFromEditor}
           />
         )}
         {editor === null && (
@@ -747,11 +1253,22 @@ function App() {
             todos={todos}
             draft={draftTodo}
             activeTodoId={activeTodoId}
+            currentDate={currentTodoDate}
+            pageMode={todoPageMode}
+            archives={archives}
+            archiveLayout={archiveLayout}
+            selectedArchive={selectedArchive}
+            saveState={saveState}
             onDraftChange={setDraftTodo}
             onAddTodo={addTodo}
             onToggleTodo={toggleTodo}
             onStartTodo={startTodo}
             onDeleteTodo={deleteTodo}
+            onSaveToday={saveTodayTodos}
+            onShowArchive={showArchive}
+            onShowToday={showToday}
+            onArchiveLayoutChange={setArchiveLayout}
+            onSelectArchive={selectArchive}
           />
         )}
       </IslandShell>
