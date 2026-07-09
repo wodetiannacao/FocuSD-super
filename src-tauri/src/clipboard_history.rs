@@ -332,8 +332,22 @@ impl ClipboardHistoryService {
         }
 
         let mut state = self.state.lock().map_err(|error| error.to_string())?;
-        state.last_capture_hash = Some(item.hash);
-        Ok(Self::snapshot_locked(&state))
+        state.last_capture_hash = Some(item.hash.clone());
+        if let Some(index) = state
+            .items
+            .iter()
+            .position(|history_item| history_item.hash == item.hash)
+        {
+            let mut moved_item = state.items.remove(index);
+            moved_item.copied_at = current_unix_millis();
+            state.items.insert(0, moved_item);
+            self.persist_locked(&state)?;
+        }
+        let snapshot = Self::snapshot_locked(&state);
+        drop(state);
+
+        self.emit_changed();
+        Ok(snapshot)
     }
 
     fn delete_item(&self, id: &str) -> Result<ClipboardHistorySnapshot, String> {

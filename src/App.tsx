@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -2126,6 +2127,8 @@ function ClipboardHistoryPanel({
   const copiedResetRef = useRef<number | null>(null);
   const confirmDeleteResetRef = useRef<number | null>(null);
   const confirmClearResetRef = useRef<number | null>(null);
+  const itemElementsRef = useRef<Map<string, HTMLElement>>(new Map());
+  const itemPositionsRef = useRef<Map<string, DOMRect>>(new Map());
   const normalizedQuery = query.trim().toLowerCase();
   const filteredItems = useMemo(() => {
     if (!normalizedQuery) {
@@ -2160,6 +2163,49 @@ function ClipboardHistoryPanel({
     },
     [],
   );
+
+  useLayoutEffect(() => {
+    const visibleIds = new Set(filteredItems.map((item) => item.id));
+    const nextPositions = new Map<string, DOMRect>();
+    const prefersReducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+
+    itemElementsRef.current.forEach((element, id) => {
+      if (!visibleIds.has(id)) {
+        return;
+      }
+
+      const nextRect = element.getBoundingClientRect();
+      const previousRect = itemPositionsRef.current.get(id);
+      nextPositions.set(id, nextRect);
+
+      if (!previousRect || prefersReducedMotion) {
+        return;
+      }
+
+      const deltaX = previousRect.left - nextRect.left;
+      const deltaY = previousRect.top - nextRect.top;
+
+      if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) {
+        return;
+      }
+
+      element.getAnimations().forEach((animation) => animation.cancel());
+      element.animate(
+        [
+          { transform: `translate(${deltaX}px, ${deltaY}px)` },
+          { transform: "translate(0, 0)" },
+        ],
+        {
+          duration: 280,
+          easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        },
+      );
+    });
+
+    itemPositionsRef.current = nextPositions;
+  }, [filteredItems]);
 
   useEffect(() => {
     if (confirmDeleteResetRef.current !== null) {
@@ -2362,7 +2408,18 @@ function ClipboardHistoryPanel({
           </div>
         ) : (
           filteredItems.map((item) => (
-            <article className="clipboard-item" key={item.id} role="listitem">
+            <article
+              className="clipboard-item"
+              key={item.id}
+              role="listitem"
+              ref={(node) => {
+                if (node) {
+                  itemElementsRef.current.set(item.id, node);
+                } else {
+                  itemElementsRef.current.delete(item.id);
+                }
+              }}
+            >
               <button
                 className="clipboard-item__main"
                 type="button"
