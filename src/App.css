@@ -153,6 +153,11 @@ input {
   box-shadow: 0 0 14px rgba(255, 77, 94, 0.72);
 }
 
+.island__pulse--agent-attention {
+  background: #ffd166;
+  box-shadow: 0 0 14px rgba(255, 209, 102, 0.72);
+}
+
 .island__agent-status-icon {
   flex: 0 0 auto;
   filter: brightness(var(--island-pulse-brightness));
@@ -167,6 +172,22 @@ input {
 
 .island__agent-status-icon--running {
   color: #ff4d5e;
+}
+
+.island__agent-status-icon--attention {
+  color: #ffd166;
+}
+
+.island__title .island__agent-status-icon--idle {
+  color: #35e985;
+}
+
+.island__title .island__agent-status-icon--running {
+  color: #ff4d5e;
+}
+
+.island__title .island__agent-status-icon--attention {
+  color: #ffd166;
 }
 
 .island--title-hidden .island__collapsed {
@@ -2124,6 +2145,114 @@ input {
   color: #ffd8df;
   border-color: rgba(255, 77, 94, 0.28);
   background: rgba(255, 77, 94, 0.09);
+}
+
+.agent-status-panel {
+  display: grid;
+  gap: 7px;
+  padding: 8px 10px;
+  color: rgba(248, 246, 240, 0.72);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+.agent-status-panel--idle {
+  border-color: rgba(53, 233, 133, 0.2);
+}
+
+.agent-status-panel--running {
+  border-color: rgba(255, 77, 94, 0.24);
+}
+
+.agent-status-panel--attention {
+  border-color: rgba(255, 209, 102, 0.34);
+  background: rgba(255, 209, 102, 0.08);
+}
+
+.agent-status-panel__summary,
+.agent-status-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-status-panel__summary span,
+.agent-status-row span {
+  color: rgba(248, 246, 240, 0.52);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-status-panel__summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(248, 246, 240, 0.9);
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-status-panel__rows {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-status-row {
+  min-height: 26px;
+}
+
+.agent-status-row > span:first-child {
+  flex: 1;
+}
+
+.agent-status-row strong {
+  color: rgba(248, 246, 240, 0.84);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.agent-status-row--attention strong {
+  color: #ffd166;
+}
+
+.agent-status-clear-button {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  color: #111112;
+  background: #ffd166;
+  border: 0;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  transition:
+    background 140ms ease,
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.agent-status-clear-button:hover:not(:disabled) {
+  background: #ffe08f;
+}
+
+.agent-status-clear-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.agent-status-clear-button:focus-visible {
+  outline: 2px solid rgba(255, 209, 102, 0.82);
+  outline-offset: 2px;
 }
 
 .slider-control {

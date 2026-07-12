@@ -47,7 +47,8 @@ type TodoPageMode = "today" | "daily" | "archive" | "review";
 type ArchiveLayout = "cards" | "timeline";
 type MediaPlaybackStatus = "unavailable" | "playing" | "paused";
 type AgentProvider = "codex" | "claudeCode";
-type AgentTaskPhase = "idle" | "running" | "completed" | "failed";
+type AgentTaskPhase = "idle" | "running" | "completed" | "failed" | "stale";
+type AgentVisualState = "idle" | "running" | "attention";
 
 type TodoItem = {
   id: string;
@@ -170,7 +171,8 @@ type IslandShellProps = {
   activeTaskTitle: string | null;
   pendingTodoCount: number;
   mediaState: MediaState;
-  isAgentRunning: boolean;
+  agentVisualState: AgentVisualState;
+  agentStatusLabel: string;
   onOpenPage: (page: IslandPage) => void;
   onCollapse: () => void;
   onMinimize: () => void;
@@ -221,6 +223,11 @@ const DEFAULT_AGENT_STATUS: AgentStatusSnapshot = {
   updatedAt: 0,
   statusPath: "",
 };
+const AGENT_PROVIDERS: AgentProvider[] = ["codex", "claudeCode"];
+const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {
+  codex: "Codex",
+  claudeCode: "Claude Code",
+};
 const DEFAULT_CLIPBOARD_HISTORY: ClipboardHistorySnapshot = {
   settings: {
     enabled: true,
@@ -265,6 +272,63 @@ function getColorSetting(value: unknown, fallback: string) {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isAgentAttentionPhase(phase: AgentTaskPhase) {
+  return phase === "failed" || phase === "stale";
+}
+
+function getAgentVisualState(snapshot: AgentStatusSnapshot): AgentVisualState {
+  const statuses = AGENT_PROVIDERS.map((provider) => snapshot[provider]);
+
+  if (statuses.some((status) => isAgentAttentionPhase(status.phase))) {
+    return "attention";
+  }
+
+  if (statuses.some((status) => status.phase === "running")) {
+    return "running";
+  }
+
+  return "idle";
+}
+
+function getAgentStatusLabel(snapshot: AgentStatusSnapshot) {
+  const attentionProvider = AGENT_PROVIDERS.find((provider) =>
+    isAgentAttentionPhase(snapshot[provider].phase),
+  );
+
+  if (attentionProvider) {
+    const phase = snapshot[attentionProvider].phase;
+    return phase === "stale"
+      ? `${AGENT_PROVIDER_LABELS[attentionProvider]} 可能已中断`
+      : `${AGENT_PROVIDER_LABELS[attentionProvider]} 运行失败`;
+  }
+
+  const runningProvider = AGENT_PROVIDERS.find(
+    (provider) => snapshot[provider].phase === "running",
+  );
+
+  if (runningProvider) {
+    return `${AGENT_PROVIDER_LABELS[runningProvider]} 正在运行`;
+  }
+
+  return "AI Agent 空闲或已完成";
+}
+
+function getAgentPhaseLabel(phase: AgentTaskPhase) {
+  switch (phase) {
+    case "running":
+      return "正在运行";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "运行失败";
+    case "stale":
+      return "可能已中断";
+    case "idle":
+    default:
+      return "空闲";
+  }
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -734,7 +798,8 @@ function IslandShell({
   activeTaskTitle,
   pendingTodoCount,
   mediaState,
-  isAgentRunning,
+  agentVisualState,
+  agentStatusLabel,
   onOpenPage,
   onCollapse,
   onMinimize,
@@ -757,15 +822,11 @@ function IslandShell({
     .join(" ");
   const pulseClassName = [
     "island__pulse",
-    isAgentRunning
-      ? "island__pulse--agent-running"
-      : "island__pulse--agent-idle",
+    `island__pulse--agent-${agentVisualState}`,
   ].join(" ");
   const agentStatusIconClassName = [
     "island__agent-status-icon",
-    isAgentRunning
-      ? "island__agent-status-icon--running"
-      : "island__agent-status-icon--idle",
+    `island__agent-status-icon--${agentVisualState}`,
   ].join(" ");
   const collapsedLabel = activeTaskTitle
     ? `正在专注：${activeTaskTitle}`
@@ -787,7 +848,7 @@ function IslandShell({
       }}
     >
       <div className="island__collapsed" aria-hidden={isExpanded}>
-        <span className={pulseClassName} />
+        <span className={pulseClassName} title={agentStatusLabel} />
         {showTitle && <span className="island__brand">FocuSD</span>}
         {activeTaskTitle ? (
           <span className="island__active-task">
@@ -826,6 +887,7 @@ function IslandShell({
               className={agentStatusIconClassName}
               size={16}
               strokeWidth={2.2}
+              aria-label={agentStatusLabel}
             />
             <span>FocuSD</span>
           </div>
@@ -1134,6 +1196,8 @@ function LayoutEditor({
   focusClipboardShortcutToken,
   presets,
   launchAtStartup,
+  agentStatus,
+  clearingAgentProvider,
   agentHooksInstallState,
   agentHooksInstallResult,
   agentHooksInstallError,
@@ -1147,6 +1211,7 @@ function LayoutEditor({
   onRenamePreset,
   onDeletePreset,
   onLaunchAtStartupChange,
+  onClearAgentStatus,
   onInstallAgentHooks,
   onClipboardShortcutFocusHandled,
 }: {
@@ -1158,6 +1223,8 @@ function LayoutEditor({
   focusClipboardShortcutToken: number;
   presets: IslandPreset[];
   launchAtStartup: boolean;
+  agentStatus: AgentStatusSnapshot;
+  clearingAgentProvider: AgentProvider | null;
   agentHooksInstallState: AgentHooksInstallState;
   agentHooksInstallResult: AgentHooksInstallResult | null;
   agentHooksInstallError: string;
@@ -1171,6 +1238,7 @@ function LayoutEditor({
   onRenamePreset: (presetId: string, name: string) => void;
   onDeletePreset: (presetId: string) => void;
   onLaunchAtStartupChange: (enabled: boolean) => void;
+  onClearAgentStatus: (provider: AgentProvider) => void;
   onInstallAgentHooks: () => void;
   onClipboardShortcutFocusHandled: () => void;
 }) {
@@ -1267,6 +1335,18 @@ function LayoutEditor({
     },
     [clipboardSettings, isRecordingShortcut, onClipboardSettingsChange],
   );
+
+  const agentStatusRows = AGENT_PROVIDERS.map((provider) => {
+    const status = agentStatus[provider];
+    return {
+      provider,
+      label: AGENT_PROVIDER_LABELS[provider],
+      phase: status.phase,
+      phaseLabel: getAgentPhaseLabel(status.phase),
+      needsAttention: isAgentAttentionPhase(status.phase),
+    };
+  });
+  const agentStatusLabel = getAgentStatusLabel(agentStatus);
 
   return (
     <div className="editor-panel">
@@ -1375,6 +1455,50 @@ function LayoutEditor({
                   : "安装/修复"}
             </span>
           </button>
+        </div>
+        <div
+          className={[
+            "agent-status-panel",
+            `agent-status-panel--${getAgentVisualState(agentStatus)}`,
+          ].join(" ")}
+        >
+          <div className="agent-status-panel__summary">
+            <span>当前状态</span>
+            <strong>{agentStatusLabel}</strong>
+          </div>
+          <div className="agent-status-panel__rows">
+            {agentStatusRows.map((row) => (
+              <div
+                className={[
+                  "agent-status-row",
+                  row.needsAttention ? "agent-status-row--attention" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={row.provider}
+              >
+                <span>{row.label}</span>
+                <strong>{row.phaseLabel}</strong>
+                {row.needsAttention ? (
+                  <button
+                    className="agent-status-clear-button"
+                    type="button"
+                    disabled={clearingAgentProvider === row.provider}
+                    title={`清除 ${row.label} 状态`}
+                    aria-label={`清除 ${row.label} 状态`}
+                    onClick={() => onClearAgentStatus(row.provider)}
+                  >
+                    <X size={12} strokeWidth={2.4} />
+                    <span>
+                      {clearingAgentProvider === row.provider
+                        ? "清除中"
+                        : "清除状态"}
+                    </span>
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </div>
         {agentHooksInstallState === "installed" && agentHooksInstallResult ? (
           <div className="agent-hooks-status agent-hooks-status--ok">
@@ -2834,6 +2958,8 @@ function App() {
   const [agentHooksInstallResult, setAgentHooksInstallResult] =
     useState<AgentHooksInstallResult | null>(null);
   const [agentHooksInstallError, setAgentHooksInstallError] = useState("");
+  const [clearingAgentProvider, setClearingAgentProvider] =
+    useState<AgentProvider | null>(null);
   const [focusClipboardShortcutToken, setFocusClipboardShortcutToken] =
     useState(0);
   const clipboardShortcutToggleAt = useRef(0);
@@ -3023,6 +3149,20 @@ function App() {
       setAgentStatus(DEFAULT_AGENT_STATUS);
     } finally {
       isRefreshingAgentStatus.current = false;
+    }
+  }, []);
+
+  const clearAgentStatus = useCallback(async (provider: AgentProvider) => {
+    setClearingAgentProvider(provider);
+    try {
+      const snapshot = await invoke<AgentStatusSnapshot>("clear_agent_status", {
+        provider,
+      });
+      setAgentStatus(snapshot);
+    } catch (error) {
+      console.error("Failed to clear agent status", error);
+    } finally {
+      setClearingAgentProvider(null);
     }
   }, []);
 
@@ -3990,10 +4130,12 @@ function App() {
     () => todos.filter((todo) => !todo.completed).length,
     [todos],
   );
-  const isAgentRunning = useMemo(
-    () =>
-      agentStatus.codex.phase === "running" ||
-      agentStatus.claudeCode.phase === "running",
+  const agentVisualState = useMemo(
+    () => getAgentVisualState(agentStatus),
+    [agentStatus],
+  );
+  const agentStatusLabel = useMemo(
+    () => getAgentStatusLabel(agentStatus),
     [agentStatus],
   );
 
@@ -4007,7 +4149,8 @@ function App() {
         activeTaskTitle={activeTaskTitle}
         pendingTodoCount={openTodoCount}
         mediaState={mediaState}
-        isAgentRunning={isAgentRunning}
+        agentVisualState={agentVisualState}
+        agentStatusLabel={agentStatusLabel}
         onOpenPage={openIslandPage}
         onCollapse={collapseIsland}
         onMinimize={minimizeIsland}
@@ -4025,6 +4168,8 @@ function App() {
             focusClipboardShortcutToken={focusClipboardShortcutToken}
             presets={settingPresets}
             launchAtStartup={launchAtStartup}
+            agentStatus={agentStatus}
+            clearingAgentProvider={clearingAgentProvider}
             agentHooksInstallState={agentHooksInstallState}
             agentHooksInstallResult={agentHooksInstallResult}
             agentHooksInstallError={agentHooksInstallError}
@@ -4038,6 +4183,7 @@ function App() {
             onRenamePreset={renameSettingsPreset}
             onDeletePreset={deleteSettingsPreset}
             onLaunchAtStartupChange={updateLaunchAtStartup}
+            onClearAgentStatus={clearAgentStatus}
             onInstallAgentHooks={installAgentHooks}
             onClipboardShortcutFocusHandled={clearClipboardShortcutFocus}
           />

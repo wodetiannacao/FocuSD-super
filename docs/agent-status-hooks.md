@@ -3,7 +3,8 @@
 FocuSD can mirror Codex and Claude Code task activity on the collapsed island status light:
 
 - running task: red
-- completed, failed, idle, or no task: green
+- completed, idle, or no task: green
+- failed task, or a running marker older than 10 minutes without a stop event: yellow
 
 Do not use process or CPU detection for this integration. Codex and Claude Code can stay alive while idle, and Claude Code may run inside a VSCode terminal. The reliable path is to wire into lifecycle hooks.
 
@@ -41,7 +42,7 @@ agent-codex-running.flag
 agent-claudeCode-running.flag
 ```
 
-FocuSD polls these marker files every 200ms. If either marker exists, the island turns red.
+FocuSD polls these marker files every 200ms. If either marker exists and is fresh, the island turns red. If a marker is still present after 10 minutes, FocuSD treats it as stale and turns the island yellow instead of leaving the user waiting on a permanent red light.
 
 When the turn finishes, `focusd-agent-status.ps1` removes the marker, writes `agent-status.json`, and keeps a short hold marker when the task completed too quickly. This makes very short prompts still visibly flash red for about 800ms.
 
@@ -63,7 +64,7 @@ When the turn finishes, `focusd-agent-status.ps1` removes the marker, writes `ag
 }
 ```
 
-Only `phase === "running"` turns the light red. Missing files, invalid JSON, missing fields, unknown phases, `idle`, `completed`, and `failed` are treated as safe green states.
+`phase === "running"` turns the light red. `phase === "failed"` turns the light yellow. Missing files, invalid JSON, missing fields, unknown phases, `idle`, and `completed` are treated as green states. A derived `stale` phase is returned by the app when a running marker remains for more than 10 minutes without a later status update.
 
 ## Manual Smoke Test
 
@@ -76,12 +77,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\focusd-agent-status.ps
 
 & "$dir\focusd-agent-running.cmd" claudeCode
 powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\focusd-agent-status.ps1" claudeCode completed
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\focusd-agent-status.ps1" claudeCode failed
 ```
 
 Expected behavior:
 
 - The island turns red after the `focusd-agent-running.cmd` command.
 - The island returns green after the `focusd-agent-status.ps1 ... completed` command.
+- The island turns yellow after the `focusd-agent-status.ps1 ... failed` command and returns green after clearing that status from the app.
 
 ## Notes For Manual Configuration
 

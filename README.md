@@ -13,7 +13,7 @@ FocuSD Island 是一个轻量级桌面效率工具。它以透明、无边框、
 ## 核心功能
 
 - 悬浮岛窗口：透明、无边框、始终置顶，支持折叠、展开、边缘收起和托盘隐藏。
-- Codex 状态指示灯：可一键安装/修复 Codex hooks，用红/绿状态提示 Codex 是否正在运行。
+- Codex 状态指示灯：可一键安装/修复 Codex hooks，用红/绿/黄状态提示 Codex 是否正在运行、已完成或需要查看。
 - 今日待办：新增、编辑、完成、删除任务，并可将某个任务设为当前专注任务。
 - 待办延续与排序：可在设置中开启「自动将未完成任务写入下一天」，也可开启拖动排序，通过任务右侧把手调整顺序。
 - 每日笔记：记录当天补充信息，与待办一起形成日归档。
@@ -27,7 +27,7 @@ FocuSD Island 是一个轻量级桌面效率工具。它以透明、无边框、
 
 ## Codex 状态指示灯
 
-FocuSD Island 内置 Codex 状态指示灯，适合把 AI 编程任务的运行状态放在桌面最显眼的位置。你可以在设置页一键安装或修复 Codex hooks；当 Codex 正在处理任务时，悬浮岛会显示运行状态，任务空闲或完成后会回到完成/空闲状态。
+FocuSD Island 内置 Codex 状态指示灯，适合把 AI 编程任务的运行状态放在桌面最显眼的位置。你可以在设置页一键安装或修复 Codex hooks；当 Codex 正在处理任务时，悬浮岛会显示红色运行状态，任务空闲或完成后会回到绿色状态。如果任务失败，或运行标记超过 10 分钟没有收到结束事件，悬浮岛会显示黄色提醒你回来看一眼。
 
 这个功能的目标很简单：不用反复切回终端或编辑器，也能知道 Codex 现在是在工作、已完成，还是需要你接手。
 
@@ -185,7 +185,7 @@ The project is currently an early MVP and is mainly designed for Windows desktop
 - Floating island window: transparent, borderless, always on top, with collapsed, expanded, edge-tucked, and tray-hidden states.
 - Today's todos: add, edit, complete, delete, and mark a task as the current focus.
 - Todo carry-over and ordering: optionally carry unfinished tasks into the next day and enable drag ordering with the handle on each task.
-- Codex status light: install or repair Codex hooks, then show whether Codex is currently running.
+- Codex status light: install or repair Codex hooks, then show whether Codex is running, finished, or needs attention.
 - Daily note: capture extra context for the day and archive it with the todo list.
 - Automatic archive: roll over the previous day's todos and note when a new day starts.
 - Markdown saving: write today's content to a local `YYYY-MM-DD.md` file.
@@ -197,7 +197,7 @@ The project is currently an early MVP and is mainly designed for Windows desktop
 
 ## Codex Status Light
 
-FocuSD Island includes a Codex status light for keeping AI coding work visible at a glance. From Settings, you can install or repair Codex hooks; while Codex is processing a task, the island shows a running state, then returns to idle or completed when the task finishes.
+FocuSD Island includes a Codex status light for keeping AI coding work visible at a glance. From Settings, you can install or repair Codex hooks; while Codex is processing a task, the island shows a red running state, then returns to green when the task is idle or completed. If the task fails, or if a running marker lasts more than 10 minutes without a stop event, the island turns yellow so you know to check back in.
 
 The goal is simple: you can tell whether Codex is still working, already finished, or needs your attention without constantly switching back to the terminal or editor.
 

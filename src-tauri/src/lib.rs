@@ -58,6 +58,7 @@ const CLAUDE_CODE_RUNNING_MARKER_FILE_NAME: &str = "agent-claudeCode-running.fla
 const CLAUDE_CODE_RUNNING_HOLD_FILE_NAME: &str = "agent-claudeCode-running-hold.flag";
 const AGENT_RUNNING_SCRIPT_FILE_NAME: &str = "focusd-agent-running.cmd";
 const AGENT_STATUS_SCRIPT_FILE_NAME: &str = "focusd-agent-status.ps1";
+const AGENT_RUNNING_STALE_AFTER_MS: i64 = 10 * 60 * 1000;
 const FOCUSD_AGENT_HOOK_BLOCK_BEGIN: &str = "# BEGIN FocuSD Agent Status Hooks";
 const FOCUSD_AGENT_HOOK_BLOCK_END: &str = "# END FocuSD Agent Status Hooks";
 const FOCUSD_AGENT_HOOK_SIGNATURE: &str = "focusd-agent-";
@@ -173,7 +174,7 @@ impl Default for AgentTaskStatus {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedAgentStatus {
     #[serde(default)]
@@ -375,6 +376,63 @@ fn get_agent_status(app: AppHandle) -> Result<AgentStatusSnapshot, String> {
 }
 
 #[tauri::command]
+fn clear_agent_status(app: AppHandle, provider: String) -> Result<AgentStatusSnapshot, String> {
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    fs::create_dir_all(&app_dir)
+        .map_err(|error| format!("Failed to create app data directory: {error}"))?;
+
+    let status_path = app_dir.join(AGENT_STATUS_FILE_NAME);
+    let status_path_display = status_path.to_string_lossy().to_string();
+    let mut persisted = match fs::read_to_string(&status_path) {
+        Ok(content) => serde_json::from_str::<PersistedAgentStatus>(&content)
+            .unwrap_or_else(|_| default_persisted_agent_status()),
+        Err(_) => default_persisted_agent_status(),
+    };
+
+    let now = current_unix_millis();
+    let cleared_status = AgentTaskStatus {
+        phase: default_agent_phase(),
+        task_id: None,
+        updated_at: now,
+    };
+
+    match provider.as_str() {
+        "codex" => {
+            persisted.codex = cleared_status;
+            remove_agent_marker_files(
+                &app_dir,
+                CODEX_RUNNING_MARKER_FILE_NAME,
+                CODEX_RUNNING_HOLD_FILE_NAME,
+            );
+        }
+        "claudeCode" => {
+            persisted.claude_code = cleared_status;
+            remove_agent_marker_files(
+                &app_dir,
+                CLAUDE_CODE_RUNNING_MARKER_FILE_NAME,
+                CLAUDE_CODE_RUNNING_HOLD_FILE_NAME,
+            );
+        }
+        _ => {
+            return Err("Unsupported agent provider.".to_string());
+        }
+    }
+
+    persisted.updated_at = now;
+    let content = serde_json::to_string_pretty(&persisted)
+        .map_err(|error| format!("Failed to serialize agent status: {error}"))?;
+    write_text_file(&status_path, &content)?;
+
+    Ok(agent_status_snapshot_from_persisted(
+        persisted,
+        status_path_display,
+    ))
+}
+
+#[tauri::command]
 fn install_agent_status_hooks(app: AppHandle) -> Result<AgentHooksInstallResult, String> {
     let app_dir = app
         .path()
@@ -472,6 +530,14 @@ fn default_agent_status_snapshot(status_path: String) -> AgentStatusSnapshot {
     }
 }
 
+fn default_persisted_agent_status() -> PersistedAgentStatus {
+    PersistedAgentStatus {
+        codex: AgentTaskStatus::default(),
+        claude_code: AgentTaskStatus::default(),
+        updated_at: current_unix_millis(),
+    }
+}
+
 fn agent_status_snapshot_from_persisted(
     persisted: PersistedAgentStatus,
     status_path: String,
@@ -491,36 +557,36 @@ fn agent_status_snapshot_from_persisted(
 fn apply_agent_running_markers(app_dir: &Path, snapshot: &mut AgentStatusSnapshot) {
     let now = current_unix_millis();
 
-    if let Some(updated_at) = active_agent_running_marker_time(
+    if let Some(marker_status) = active_agent_running_marker_status(
         app_dir,
         &snapshot.codex,
         CODEX_RUNNING_MARKER_FILE_NAME,
         CODEX_RUNNING_HOLD_FILE_NAME,
         now,
     ) {
-        snapshot.codex.phase = "running".to_string();
-        snapshot.codex.updated_at = updated_at;
+        snapshot.codex.phase = marker_status.phase;
+        snapshot.codex.updated_at = marker_status.updated_at;
     }
 
-    if let Some(updated_at) = active_agent_running_marker_time(
+    if let Some(marker_status) = active_agent_running_marker_status(
         app_dir,
         &snapshot.claude_code,
         CLAUDE_CODE_RUNNING_MARKER_FILE_NAME,
         CLAUDE_CODE_RUNNING_HOLD_FILE_NAME,
         now,
     ) {
-        snapshot.claude_code.phase = "running".to_string();
-        snapshot.claude_code.updated_at = updated_at;
+        snapshot.claude_code.phase = marker_status.phase;
+        snapshot.claude_code.updated_at = marker_status.updated_at;
     }
 }
 
-fn active_agent_running_marker_time(
+fn active_agent_running_marker_status(
     app_dir: &Path,
     status: &AgentTaskStatus,
     running_file_name: &str,
     hold_file_name: &str,
     now: i64,
-) -> Option<i64> {
+) -> Option<AgentTaskStatus> {
     let running_path = app_dir.join(running_file_name);
     if running_path.is_file() {
         let marker_updated_at = file_modified_unix_millis(&running_path).unwrap_or(now);
@@ -531,7 +597,17 @@ fn active_agent_running_marker_time(
             return None;
         }
 
-        return Some(marker_updated_at);
+        let phase = if now.saturating_sub(marker_updated_at) >= AGENT_RUNNING_STALE_AFTER_MS {
+            "stale"
+        } else {
+            "running"
+        };
+
+        return Some(AgentTaskStatus {
+            phase: phase.to_string(),
+            task_id: status.task_id.clone(),
+            updated_at: marker_updated_at,
+        });
     }
 
     let hold_path = app_dir.join(hold_file_name);
@@ -539,16 +615,25 @@ fn active_agent_running_marker_time(
         .ok()
         .and_then(|content| content.trim().parse::<i64>().ok())?;
     if visible_until > now {
-        Some(now)
+        Some(AgentTaskStatus {
+            phase: "running".to_string(),
+            task_id: status.task_id.clone(),
+            updated_at: now,
+        })
     } else {
         None
     }
 }
 
+fn remove_agent_marker_files(app_dir: &Path, running_file_name: &str, hold_file_name: &str) {
+    fs::remove_file(app_dir.join(running_file_name)).ok();
+    fs::remove_file(app_dir.join(hold_file_name)).ok();
+}
+
 fn normalize_agent_task_status(mut status: AgentTaskStatus) -> AgentTaskStatus {
     if !matches!(
         status.phase.as_str(),
-        "idle" | "running" | "completed" | "failed"
+        "idle" | "running" | "completed" | "failed" | "stale"
     ) {
         status.phase = default_agent_phase();
     }
@@ -1250,6 +1335,7 @@ pub fn run() {
             get_launch_at_startup,
             set_launch_at_startup,
             get_agent_status,
+            clear_agent_status,
             install_agent_status_hooks,
             get_media_state,
             get_audio_level,
