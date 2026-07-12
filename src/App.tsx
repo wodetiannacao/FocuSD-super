@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type WheelEvent,
 } from "react";
@@ -17,6 +18,7 @@ import {
   ClipboardList,
   Columns2,
   Copy,
+  GripVertical,
   ImageIcon,
   Keyboard,
   Minus,
@@ -148,6 +150,8 @@ type IslandSettings = {
   islandBackgroundColor: string;
   todoBackgroundColor: string;
   showTitle: boolean;
+  carryOverIncompleteTodos: boolean;
+  enableTodoReorder: boolean;
 };
 
 type IslandPreset = {
@@ -236,6 +240,8 @@ const DEFAULT_SETTINGS: IslandSettings = {
   islandBackgroundColor: "#101013",
   todoBackgroundColor: "#ffffff",
   showTitle: true,
+  carryOverIncompleteTodos: false,
+  enableTodoReorder: false,
 };
 const LEGACY_DEFAULT_PRESET_IDS = new Set(["default-white", "default-khaki"]);
 const LEGACY_DEFAULT_PRESET_NAMES = new Set(["白色", "卡其"]);
@@ -464,6 +470,14 @@ function normalizeSettings(
       typeof settings?.showTitle === "boolean"
         ? settings.showTitle
         : DEFAULT_SETTINGS.showTitle,
+    carryOverIncompleteTodos:
+      typeof settings?.carryOverIncompleteTodos === "boolean"
+        ? settings.carryOverIncompleteTodos
+        : DEFAULT_SETTINGS.carryOverIncompleteTodos,
+    enableTodoReorder:
+      typeof settings?.enableTodoReorder === "boolean"
+        ? settings.enableTodoReorder
+        : DEFAULT_SETTINGS.enableTodoReorder,
   };
 }
 
@@ -1312,6 +1326,26 @@ function LayoutEditor({
         />
       </section>
 
+      <section className="settings-section settings-section--todo">
+        <div className="settings-section__header">
+          <span>待办设置</span>
+        </div>
+        <ToggleControl
+          label="自动将未完成任务写入下一天"
+          checked={settings.carryOverIncompleteTodos}
+          onChange={(carryOverIncompleteTodos) =>
+            onSettingsChange({ ...settings, carryOverIncompleteTodos })
+          }
+        />
+        <ToggleControl
+          label="允许拖动调整任务顺序"
+          checked={settings.enableTodoReorder}
+          onChange={(enableTodoReorder) =>
+            onSettingsChange({ ...settings, enableTodoReorder })
+          }
+        />
+      </section>
+
       <section className="settings-section settings-section--agent-hooks">
         <div className="settings-section__header">
           <span>AI Agent 状态灯</span>
@@ -1623,12 +1657,14 @@ function TodoNotebook({
   archiveLayout,
   selectedArchive,
   saveState,
+  enableTodoReorder,
   onDraftChange,
   onAddTodo,
   onToggleTodo,
   onUpdateTodo,
   onStartTodo,
   onDeleteTodo,
+  onReorderTodo,
   onSaveToday,
   onShowArchive,
   onShowDaily,
@@ -1647,12 +1683,14 @@ function TodoNotebook({
   archiveLayout: ArchiveLayout;
   selectedArchive: TodoArchive | null;
   saveState: SaveState;
+  enableTodoReorder: boolean;
   onDraftChange: (value: string) => void;
   onAddTodo: () => void;
   onToggleTodo: (id: string) => void;
   onUpdateTodo: (id: string, title: string) => void;
   onStartTodo: (id: string) => void;
   onDeleteTodo: (id: string) => void;
+  onReorderTodo: (sourceId: string, targetId: string) => void;
   onSaveToday: () => void;
   onShowArchive: () => void;
   onShowDaily: () => void;
@@ -1691,6 +1729,9 @@ function TodoNotebook({
     .join(" ");
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
   const [todoTitleDraft, setTodoTitleDraft] = useState("");
+  const [draggedTodoId, setDraggedTodoId] = useState<string | null>(null);
+  const [dragOverTodoId, setDragOverTodoId] = useState<string | null>(null);
+  const canReorderTodos = isTodayMode && enableTodoReorder;
 
   const startTodoTitleEdit = useCallback((todo: TodoItem) => {
     if (!isTodayMode) {
@@ -1715,6 +1756,73 @@ function TodoNotebook({
     setEditingTodoId(null);
     setTodoTitleDraft("");
   }, [editingTodoId, onUpdateTodo, todoTitleDraft]);
+
+  const getTodoIdAtPoint = useCallback((clientX: number, clientY: number) => {
+    const element = document.elementFromPoint(clientX, clientY);
+    const todoElement = element?.closest("[data-todo-id]");
+
+    return todoElement instanceof HTMLElement
+      ? todoElement.dataset.todoId ?? null
+      : null;
+  }, []);
+
+  const startTodoDrag = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>, todoId: string) => {
+      if (!canReorderTodos || editingTodoId === todoId) {
+        return;
+      }
+
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDraggedTodoId(todoId);
+      setDragOverTodoId(null);
+    },
+    [canReorderTodos, editingTodoId],
+  );
+
+  const moveTodoDrag = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (!draggedTodoId) {
+        return;
+      }
+
+      event.preventDefault();
+      const targetTodoId = getTodoIdAtPoint(event.clientX, event.clientY);
+      setDragOverTodoId(
+        targetTodoId && targetTodoId !== draggedTodoId ? targetTodoId : null,
+      );
+    },
+    [draggedTodoId, getTodoIdAtPoint],
+  );
+
+  const finishTodoDrag = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (!draggedTodoId) {
+        return;
+      }
+
+      event.preventDefault();
+      const targetTodoId =
+        dragOverTodoId || getTodoIdAtPoint(event.clientX, event.clientY);
+
+      if (targetTodoId && targetTodoId !== draggedTodoId) {
+        onReorderTodo(draggedTodoId, targetTodoId);
+      }
+
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+
+      setDraggedTodoId(null);
+      setDragOverTodoId(null);
+    },
+    [dragOverTodoId, draggedTodoId, getTodoIdAtPoint, onReorderTodo],
+  );
+
+  const cancelTodoDrag = useCallback(() => {
+    setDraggedTodoId(null);
+    setDragOverTodoId(null);
+  }, []);
 
   return (
     <section className={notebookClassName} aria-label="任务清单">
@@ -1885,12 +1993,16 @@ function TodoNotebook({
                     "todo-item",
                     todo.completed ? "todo-item--done" : "",
                     isActive ? "todo-item--active" : "",
+                    canReorderTodos ? "todo-item--reorderable" : "",
+                    draggedTodoId === todo.id ? "todo-item--dragging" : "",
+                    dragOverTodoId === todo.id ? "todo-item--drag-over" : "",
                     !isTodayMode ? "todo-item--readonly" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
                   key={todo.id}
                   role="listitem"
+                  data-todo-id={todo.id}
                   style={
                     {
                       "--todo-title-min-height": `${titleLineCount * 19}px`,
@@ -1967,6 +2079,21 @@ function TodoNotebook({
                       >
                         <Trash2 size={14} strokeWidth={2.2} />
                       </button>
+                      {canReorderTodos && (
+                        <button
+                          className="todo-drag-handle"
+                          type="button"
+                          title="拖动排序"
+                          aria-label={`拖动排序：${todo.title}`}
+                          disabled={editingTodoId === todo.id}
+                          onPointerDown={(event) => startTodoDrag(event, todo.id)}
+                          onPointerMove={moveTodoDrag}
+                          onPointerUp={finishTodoDrag}
+                          onPointerCancel={cancelTodoDrag}
+                        >
+                          <GripVertical size={15} strokeWidth={2.4} />
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
@@ -3225,6 +3352,28 @@ function App() {
     setActiveTodoId((currentId) => (currentId === id ? null : currentId));
   }, []);
 
+  const reorderTodo = useCallback((sourceId: string, targetId: string) => {
+    if (sourceId === targetId) {
+      return;
+    }
+
+    setTodos((currentTodos) => {
+      const sourceIndex = currentTodos.findIndex((todo) => todo.id === sourceId);
+      const targetIndex = currentTodos.findIndex((todo) => todo.id === targetId);
+
+      if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+        return currentTodos;
+      }
+
+      const nextTodos = [...currentTodos];
+      const [movedTodo] = nextTodos.splice(sourceIndex, 1);
+      const insertIndex = targetIndex;
+      nextTodos.splice(insertIndex, 0, movedTodo);
+
+      return nextTodos;
+    });
+  }, []);
+
   const upsertArchive = useCallback(
     (
       date: string,
@@ -3363,6 +3512,17 @@ function App() {
       const lastSavedSignature = window.localStorage.getItem(
         TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY,
       );
+      const carryOverCreatedAt = Date.now();
+      const carriedTodos = settings.carryOverIncompleteTodos
+        ? todos
+            .filter((todo) => !todo.completed)
+            .map((todo, index) => ({
+              ...todo,
+              id: createTodoId(),
+              completed: false,
+              createdAt: carryOverCreatedAt + index,
+            }))
+        : [];
 
       if (
         (todos.length > 0 || dailyNote.trim()) &&
@@ -3380,22 +3540,28 @@ function App() {
         }
       }
 
-      setTodos([]);
+      setTodos(carriedTodos);
       setDailyNote("");
       setActiveTodoId(null);
       setCurrentTodoDate(nextDate);
       setTodoPageMode("today");
       setSelectedArchiveDate(null);
-      window.localStorage.setItem(
-        TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY,
-        getTodoSignature(nextDate, [], ""),
-      );
+
+      if (carriedTodos.length > 0) {
+        window.localStorage.removeItem(TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(
+          TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY,
+          getTodoSignature(nextDate, [], ""),
+        );
+      }
     },
     [
       currentTodoDate,
       dailyNote,
       saveDirectory,
       saveTodosToDisk,
+      settings.carryOverIncompleteTodos,
       todos,
       upsertArchive,
     ],
@@ -3905,12 +4071,14 @@ function App() {
             archiveLayout={archiveLayout}
             selectedArchive={selectedArchive}
             saveState={saveState}
+            enableTodoReorder={settings.enableTodoReorder}
             onDraftChange={setDraftTodo}
             onAddTodo={addTodo}
             onToggleTodo={toggleTodo}
             onUpdateTodo={updateTodoTitle}
             onStartTodo={startTodo}
             onDeleteTodo={deleteTodo}
+            onReorderTodo={reorderTodo}
             onSaveToday={saveTodayTodos}
             onShowArchive={showArchive}
             onShowDaily={showDaily}

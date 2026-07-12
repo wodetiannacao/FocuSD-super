@@ -1431,6 +1431,20 @@ input {
   border-color: rgba(64, 125, 147, 0.28);
 }
 
+.todo-item--reorderable {
+  grid-template-columns: 22px minmax(0, 1fr) auto 28px 24px;
+}
+
+.todo-item--dragging {
+  opacity: 0.5;
+  transform: scale(0.985);
+}
+
+.todo-item--drag-over {
+  border-color: rgba(116, 83, 214, 0.5);
+  box-shadow: inset 3px 0 0 rgba(116, 83, 214, 0.58);
+}
+
 .todo-item--readonly {
   grid-template-columns: 22px minmax(0, 1fr);
 }
@@ -1462,6 +1476,7 @@ input {
 .todo-check:focus-visible,
 .todo-start:focus-visible,
 .todo-delete:focus-visible,
+.todo-drag-handle:focus-visible,
 .todo-title--editable:focus-visible,
 .todo-title-input:focus-visible {
   outline: 2px solid rgba(116, 83, 214, 0.58);
@@ -1589,6 +1604,41 @@ input {
 
 .todo-delete:active {
   transform: translateY(1px);
+}
+
+.todo-drag-handle {
+  width: 24px;
+  height: 27px;
+  align-self: start;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  color: rgba(31, 27, 22, 0.42);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  outline: none;
+  cursor: grab;
+  touch-action: none;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.todo-drag-handle:hover {
+  color: rgba(31, 27, 22, 0.78);
+  background: rgba(31, 27, 22, 0.07);
+}
+
+.todo-drag-handle:active {
+  cursor: grabbing;
+  transform: translateY(1px);
+}
+
+.todo-drag-handle:disabled {
+  cursor: default;
+  opacity: 0.35;
 }
 
 .archive-cards {
@@ -1942,6 +1992,7 @@ input {
 .settings-section--colors,
 .settings-section--presets,
 .settings-section--agent-hooks,
+.settings-section--todo,
 .settings-section--storage {
   margin-top: 6px;
   padding-top: 12px;
@@ -2678,6 +2729,7 @@ input {
   .todo-item,
   .todo-start,
   .todo-delete,
+  .todo-drag-handle,
   .save-path-button {
     transition: none;
   }
