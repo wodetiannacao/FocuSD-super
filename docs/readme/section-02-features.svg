@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="150" viewBox="0 0 1200 150" role="img" aria-label="02 核心功能 Core Features">
-  <rect width="1200" height="150" rx="24" fill="#121411"/>
-  <path d="M0 116 C184 52 296 124 472 82 C636 43 778 88 932 42 C1058 4 1140 22 1200 0 L1200 150 L0 150 Z" fill="#98d4bb" opacity="0.12"/>
-  <circle cx="70" cy="75" r="28" fill="#98d4bb"/>
-  <text x="58" y="84" fill="#101013" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="900">02</text>
-  <text x="128" y="68" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="850">核心功能</text>
-  <text x="130" y="100" fill="#f8f4e9" fill-opacity="0.66" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Core Features</text>
-</svg>
