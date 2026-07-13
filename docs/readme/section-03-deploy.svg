@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="150" viewBox="0 0 1200 150" role="img" aria-label="03 部署方式 Deployment">
+  <rect width="1200" height="150" rx="24" fill="#15131a"/>
+  <path d="M0 116 C168 70 300 126 456 82 C616 36 790 96 950 48 C1058 16 1140 34 1200 12 L1200 150 L0 150 Z" fill="#c7b8ea" opacity="0.13"/>
+  <circle cx="70" cy="75" r="28" fill="#c7b8ea"/>
+  <text x="58" y="84" fill="#101013" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="900">03</text>
+  <text x="128" y="68" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="850">部署方式</text>
+  <text x="130" y="100" fill="#f8f4e9" fill-opacity="0.66" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Deployment</text>
+</svg>

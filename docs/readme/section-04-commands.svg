@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="150" viewBox="0 0 1200 150" role="img" aria-label="04 常用命令 Commands">
+  <rect width="1200" height="150" rx="24" fill="#181410"/>
+  <path d="M0 110 C178 66 278 126 458 86 C626 48 774 96 936 52 C1058 18 1132 36 1200 18 L1200 150 L0 150 Z" fill="#ffd166" opacity="0.12"/>
+  <circle cx="70" cy="75" r="28" fill="#ffd166"/>
+  <text x="57" y="84" fill="#101013" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="900">04</text>
+  <text x="128" y="68" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="850">常用命令</text>
+  <text x="130" y="100" fill="#f8f4e9" fill-opacity="0.66" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Commands</text>
+</svg>

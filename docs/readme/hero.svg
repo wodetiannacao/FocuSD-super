@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">FocuSD Island</title>
+  <desc id="desc">A vertical presentation hero for the FocuSD Island README.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f1117"/>
+      <stop offset="0.52" stop-color="#171922"/>
+      <stop offset="1" stop-color="#231f1a"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-40%" width="140%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="520" rx="32" fill="url(#bg)"/>
+  <path d="M0 396 C180 326 276 442 446 368 C620 292 728 328 887 258 C1012 203 1098 227 1200 176 L1200 520 L0 520 Z" fill="#74d6ff" opacity="0.08"/>
+  <path d="M64 74 H1136" stroke="#ffffff" stroke-opacity="0.10"/>
+  <g transform="translate(64 70)">
+    <rect x="0" y="0" width="318" height="48" rx="24" fill="#101013" filter="url(#shadow)"/>
+    <circle cx="32" cy="24" r="9" fill="#ff6b6b"/>
+    <circle cx="58" cy="24" r="9" fill="#9be7c4"/>
+    <circle cx="84" cy="24" r="9" fill="#ffd166"/>
+    <text x="116" y="30" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Codex status island</text>
+  </g>
+  <g transform="translate(64 154)">
+    <text x="0" y="0" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="74" font-weight="850" letter-spacing="0">FocuSD Island</text>
+    <text x="2" y="54" fill="#f8f4e9" fill-opacity="0.78" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="600">Windows-first floating focus desk for todos, notes, Codex status, clipboard history, and media control.</text>
+  </g>
+  <g transform="translate(64 284)">
+    <rect width="190" height="42" rx="21" fill="#a8d8ea"/>
+    <text x="24" y="27" fill="#171410" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="800">Tauri 2</text>
+    <rect x="206" width="190" height="42" rx="21" fill="#98d4bb"/>
+    <text x="230" y="27" fill="#171410" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="800">React 19</text>
+    <rect x="412" width="250" height="42" rx="21" fill="#ffd166"/>
+    <text x="436" y="27" fill="#171410" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="800">Markdown workflow</text>
+  </g>
+  <g transform="translate(760 112)" filter="url(#shadow)">
+    <rect width="330" height="270" rx="26" fill="url(#panel)" stroke="#ffffff" stroke-opacity="0.16"/>
+    <rect x="34" y="34" width="262" height="42" rx="21" fill="#101013"/>
+    <circle cx="62" cy="55" r="8" fill="#9be7c4"/>
+    <text x="86" y="61" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="800">Today</text>
+    <g transform="translate(34 104)">
+      <rect width="262" height="38" rx="10" fill="#ffffff" fill-opacity="0.80"/>
+      <rect x="14" y="11" width="16" height="16" rx="4" fill="#2f8c61"/>
+      <text x="44" y="25" fill="#1f1b16" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700">Ship the useful thing</text>
+    </g>
+    <g transform="translate(34 154)">
+      <rect width="262" height="38" rx="10" fill="#ffffff" fill-opacity="0.62"/>
+      <rect x="14" y="11" width="16" height="16" rx="4" fill="#ffffff" stroke="#1f1b16" stroke-opacity="0.35" stroke-width="2"/>
+      <text x="44" y="25" fill="#1f1b16" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700">Carry unfinished tasks</text>
+    </g>
+    <g transform="translate(34 204)">
+      <rect width="262" height="38" rx="10" fill="#ffffff" fill-opacity="0.62"/>
+      <rect x="14" y="11" width="16" height="16" rx="4" fill="#ffffff" stroke="#1f1b16" stroke-opacity="0.35" stroke-width="2"/>
+      <text x="44" y="25" fill="#1f1b16" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700">Keep Codex visible</text>
+    </g>
+  </g>
+</svg>

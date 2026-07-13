@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="150" viewBox="0 0 1200 150" role="img" aria-label="08 English Quick Reference">
+  <rect width="1200" height="150" rx="24" fill="#111318"/>
+  <path d="M0 116 C170 62 304 130 472 84 C638 40 778 92 944 46 C1064 12 1142 34 1200 12 L1200 150 L0 150 Z" fill="#ffffff" opacity="0.10"/>
+  <circle cx="70" cy="75" r="28" fill="#ffffff" fill-opacity="0.86"/>
+  <text x="57" y="84" fill="#101013" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="900">08</text>
+  <text x="128" y="68" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="850">English</text>
+  <text x="130" y="100" fill="#f8f4e9" fill-opacity="0.66" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Quick Reference</text>
+</svg>

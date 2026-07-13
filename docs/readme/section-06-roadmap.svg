@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="150" viewBox="0 0 1200 150" role="img" aria-label="06 未来计划 Roadmap">
+  <rect width="1200" height="150" rx="24" fill="#111713"/>
+  <path d="M0 112 C184 64 314 132 486 84 C644 40 782 92 950 46 C1060 16 1144 32 1200 8 L1200 150 L0 150 Z" fill="#9be7c4" opacity="0.12"/>
+  <circle cx="70" cy="75" r="28" fill="#9be7c4"/>
+  <text x="57" y="84" fill="#101013" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="900">06</text>
+  <text x="128" y="68" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="850">未来计划</text>
+  <text x="130" y="100" fill="#f8f4e9" fill-opacity="0.66" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Roadmap</text>
+</svg>
