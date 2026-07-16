@@ -479,7 +479,7 @@ fn get_media_state() -> MediaState {
 
 #[tauri::command]
 fn get_audio_level() -> AudioLevel {
-    let peak = read_system_audio_peak_window(6, Duration::from_millis(8)).unwrap_or(0.0);
+    let peak = read_system_audio_peak_window(1, Duration::ZERO).unwrap_or(0.0);
 
     AudioLevel {
         active: peak > AUDIO_ACTIVE_THRESHOLD,

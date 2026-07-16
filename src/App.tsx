@@ -3418,7 +3418,7 @@ function App() {
 
     const interval = window.setInterval(() => {
       void refreshAudioLevel();
-    }, 120);
+    }, 500);
 
     return () => {
       didCancel = true;

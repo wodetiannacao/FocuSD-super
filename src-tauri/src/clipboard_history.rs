@@ -9,7 +9,7 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
     sync::{
-        mpsc::{self, Sender},
+        mpsc::{self, SyncSender},
         Mutex, OnceLock,
     },
     thread,
@@ -50,14 +50,14 @@ const MAX_MAX_ITEMS: usize = 200;
 const SHORT_DUPLICATE_WINDOW_MS: i64 = 2_000;
 const MAX_IMAGE_PNG_BYTES: usize = 10 * 1024 * 1024;
 const THUMBNAIL_MAX_SIDE: u32 = 128;
-const POLL_INTERVAL: Duration = Duration::from_millis(750);
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const CLIPBOARD_WRITE_RETRY_ATTEMPTS: usize = 8;
 const CLIPBOARD_WRITE_RETRY_DELAY: Duration = Duration::from_millis(35);
 const HOTKEY_ID: i32 = 0x4643;
 const HOTKEY_REFRESH_MESSAGE: u32 = WM_APP + 0x51;
 
 static CLIPBOARD_HISTORY: OnceLock<ClipboardHistoryService> = OnceLock::new();
-static CLIPBOARD_NOTIFY_TX: OnceLock<Mutex<Option<Sender<()>>>> = OnceLock::new();
+static CLIPBOARD_NOTIFY_TX: OnceLock<Mutex<Option<SyncSender<()>>>> = OnceLock::new();
 static CLIPBOARD_HOTKEY_WINDOW: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 static CLIPBOARD_HOTKEY_REGISTERED: OnceLock<Mutex<bool>> = OnceLock::new();
 
@@ -724,7 +724,9 @@ fn create_item_id(timestamp: i64, hash: &str) -> String {
 }
 
 fn start_workers() {
-    let (tx, rx) = mpsc::channel::<()>();
+    // Clipboard reads can block while another process owns the clipboard. Keep at most one
+    // pending read so a busy clipboard cannot build an unbounded backlog of work.
+    let (tx, rx) = mpsc::sync_channel::<()>(1);
     let _ = CLIPBOARD_NOTIFY_TX.set(Mutex::new(Some(tx)));
 
     thread::spawn(move || {
@@ -735,14 +737,14 @@ fn start_workers() {
         }
     });
 
-    thread::spawn(|| loop {
-        thread::sleep(POLL_INTERVAL);
-        notify_clipboard_changed();
-    });
-
     thread::spawn(|| {
         if let Err(error) = run_windows_clipboard_listener() {
             eprintln!("clipboard listener fell back to polling only: {error}");
+
+            loop {
+                thread::sleep(POLL_INTERVAL);
+                notify_clipboard_changed();
+            }
         }
     });
 }
@@ -767,7 +769,7 @@ fn notify_clipboard_changed() {
         .and_then(|sender| sender.lock().ok())
         .and_then(|sender| sender.as_ref().cloned())
     {
-        let _ = sender.send(());
+        let _ = sender.try_send(());
     }
 }
 
