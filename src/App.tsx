@@ -42,13 +42,13 @@ import "./App.css";
 
 export type IslandMode = "collapsed" | "expanded";
 
-type IslandPage = "todo" | "music" | "clipboard" | "layout";
+type IslandPage = "todo" | "music" | "clipboard" | "layout" | "agent";
 type TodoPageMode = "today" | "daily" | "archive" | "review";
 type ArchiveLayout = "cards" | "timeline";
 type MediaPlaybackStatus = "unavailable" | "playing" | "paused";
 type AgentProvider = "codex" | "claudeCode";
 type AgentTaskPhase = "idle" | "running" | "completed" | "failed" | "stale";
-type AgentVisualState = "idle" | "running" | "attention";
+type AgentVisualState = "idle" | "running" | "completed" | "attention";
 
 type TodoItem = {
   id: string;
@@ -120,15 +120,26 @@ type AudioLevel = {
   updatedAt: number;
 };
 
-type AgentTaskStatus = {
+type AgentInstance = {
+  id: string;
+  provider: AgentProvider;
+  displayIndex: number;
   phase: AgentTaskPhase;
   taskId?: string;
+  displayName?: string;
   updatedAt: number;
 };
 
-type AgentStatusSnapshot = Record<AgentProvider, AgentTaskStatus> & {
+type AgentStatusSnapshot = {
+  instances: AgentInstance[];
   updatedAt: number;
   statusPath: string;
+};
+
+type IslandPositionSnapshot = {
+  useFreePosition: boolean;
+  x: number;
+  y: number;
 };
 
 type AgentHooksInstallResult = {
@@ -148,6 +159,7 @@ type IslandSettings = {
   taskTextColor: string;
   pulseColor: string;
   pulseBrightness: number;
+  agentCompletedRetentionMinutes: number;
   islandBackgroundColor: string;
   todoBackgroundColor: string;
   showTitle: boolean;
@@ -173,12 +185,14 @@ type IslandShellProps = {
   mediaState: MediaState;
   agentVisualState: AgentVisualState;
   agentStatusLabel: string;
+  agentLightInstances: AgentInstance[];
   onOpenPage: (page: IslandPage) => void;
   onCollapse: () => void;
   onMinimize: () => void;
   onTuck: () => void;
   onReveal: () => void;
   onPageChange: (page: IslandPage) => void;
+  onIslandDragEnd: () => void;
   children: ReactNode;
 };
 
@@ -213,21 +227,24 @@ const DEFAULT_MEDIA_STATE: MediaState = {
   playbackStatus: "unavailable",
   updatedAt: 0,
 };
-const DEFAULT_AGENT_TASK_STATUS: AgentTaskStatus = {
-  phase: "idle",
-  updatedAt: 0,
-};
 const DEFAULT_AGENT_STATUS: AgentStatusSnapshot = {
-  codex: DEFAULT_AGENT_TASK_STATUS,
-  claudeCode: DEFAULT_AGENT_TASK_STATUS,
+  instances: [],
   updatedAt: 0,
   statusPath: "",
 };
-const AGENT_PROVIDERS: AgentProvider[] = ["codex", "claudeCode"];
 const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {
   codex: "Codex",
   claudeCode: "Claude Code",
 };
+const AGENT_PROVIDER_SHORT_LABELS: Record<AgentProvider, string> = {
+  codex: "codex",
+  claudeCode: "claude",
+};
+const DRAG_THRESHOLD_PX = 5;
+const AGENT_EXPANDED_ISLAND_HEIGHT = 360;
+const AGENT_COMPLETED_RETENTION_MINUTES_MIN = 0;
+const AGENT_COMPLETED_RETENTION_MINUTES_MAX = 24 * 60;
+const MINUTE_MS = 60 * 1000;
 const DEFAULT_CLIPBOARD_HISTORY: ClipboardHistorySnapshot = {
   settings: {
     enabled: true,
@@ -245,6 +262,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   pulseColor: "#49e18f",
   pulseBrightness: 100,
   islandBackgroundColor: "#101013",
+  agentCompletedRetentionMinutes: 30,
   todoBackgroundColor: "#ffffff",
   showTitle: true,
   carryOverIncompleteTodos: false,
@@ -278,38 +296,154 @@ function isAgentAttentionPhase(phase: AgentTaskPhase) {
   return phase === "failed" || phase === "stale";
 }
 
-function getAgentVisualState(snapshot: AgentStatusSnapshot): AgentVisualState {
-  const statuses = AGENT_PROVIDERS.map((provider) => snapshot[provider]);
+function isAgentLightPhase(
+  instance: AgentInstance,
+  completedRetentionMinutes: number,
+  now: number,
+) {
+  if (instance.phase === "running" || isAgentAttentionPhase(instance.phase)) {
+    return true;
+  }
 
-  if (statuses.some((status) => isAgentAttentionPhase(status.phase))) {
+  if (instance.phase !== "completed" || completedRetentionMinutes <= 0) {
+    return false;
+  }
+
+  const retentionMs = completedRetentionMinutes * MINUTE_MS;
+  return (
+    instance.updatedAt > 0 &&
+    now - instance.updatedAt >= 0 &&
+    now - instance.updatedAt < retentionMs
+  );
+}
+
+function normalizeAgentPhase(phase: unknown): AgentTaskPhase {
+  if (
+    phase === "idle" ||
+    phase === "running" ||
+    phase === "completed" ||
+    phase === "failed" ||
+    phase === "stale"
+  ) {
+    return phase;
+  }
+  return "idle";
+}
+
+function normalizeAgentProvider(provider: unknown): AgentProvider {
+  return provider === "claudeCode" ? "claudeCode" : "codex";
+}
+
+function normalizeAgentInstance(raw: Partial<AgentInstance> | null | undefined): AgentInstance | null {
+  if (!raw || typeof raw.id !== "string" || !raw.id.trim()) {
+    return null;
+  }
+
+  return {
+    id: raw.id,
+    provider: normalizeAgentProvider(raw.provider),
+    displayIndex: Math.max(1, Number(raw.displayIndex) || 1),
+    phase: normalizeAgentPhase(raw.phase),
+    taskId: typeof raw.taskId === "string" ? raw.taskId : undefined,
+    displayName:
+      typeof raw.displayName === "string" && raw.displayName.trim()
+        ? raw.displayName.trim()
+        : undefined,
+    updatedAt: Number(raw.updatedAt) || 0,
+  };
+}
+
+function normalizeAgentStatusSnapshot(
+  snapshot: Partial<AgentStatusSnapshot> | null | undefined,
+): AgentStatusSnapshot {
+  const instances = Array.isArray(snapshot?.instances)
+    ? snapshot.instances
+        .map((item) => normalizeAgentInstance(item))
+        .filter((item): item is AgentInstance => item !== null)
+    : [];
+
+  return {
+    instances,
+    updatedAt: Number(snapshot?.updatedAt) || 0,
+    statusPath:
+      typeof snapshot?.statusPath === "string" ? snapshot.statusPath : "",
+  };
+}
+
+function getAgentInstanceLabel(instance: AgentInstance) {
+  return `${AGENT_PROVIDER_SHORT_LABELS[instance.provider]}(${instance.displayIndex})`;
+}
+
+function getAgentInstanceVisualState(phase: AgentTaskPhase): AgentVisualState {
+  if (isAgentAttentionPhase(phase)) {
+    return "attention";
+  }
+  if (phase === "running") {
+    return "running";
+  }
+  if (phase === "completed") {
+    return "completed";
+  }
+  return "idle";
+}
+
+function getAgentLightInstances(
+  snapshot: AgentStatusSnapshot,
+  completedRetentionMinutes: number,
+  now = Date.now(),
+): AgentInstance[] {
+  return snapshot.instances.filter((instance) =>
+    isAgentLightPhase(instance, completedRetentionMinutes, now),
+  );
+}
+
+function getAgentVisualState(
+  snapshot: AgentStatusSnapshot,
+  completedRetentionMinutes: number,
+): AgentVisualState {
+  const lights = getAgentLightInstances(snapshot, completedRetentionMinutes);
+
+  if (lights.some((instance) => isAgentAttentionPhase(instance.phase))) {
     return "attention";
   }
 
-  if (statuses.some((status) => status.phase === "running")) {
+  if (lights.some((instance) => instance.phase === "running")) {
     return "running";
   }
 
   return "idle";
 }
 
-function getAgentStatusLabel(snapshot: AgentStatusSnapshot) {
-  const attentionProvider = AGENT_PROVIDERS.find((provider) =>
-    isAgentAttentionPhase(snapshot[provider].phase),
-  );
+function getAgentStatusLabel(
+  snapshot: AgentStatusSnapshot,
+  completedRetentionMinutes: number,
+) {
+  const lights = getAgentLightInstances(snapshot, completedRetentionMinutes);
 
-  if (attentionProvider) {
-    const phase = snapshot[attentionProvider].phase;
-    return phase === "stale"
-      ? `${AGENT_PROVIDER_LABELS[attentionProvider]} 可能已中断`
-      : `${AGENT_PROVIDER_LABELS[attentionProvider]} 运行失败`;
+  if (lights.length === 0) {
+    return "AI Agent 空闲或已完成";
   }
 
-  const runningProvider = AGENT_PROVIDERS.find(
-    (provider) => snapshot[provider].phase === "running",
-  );
+  const attention = lights.find((instance) => isAgentAttentionPhase(instance.phase));
+  if (attention) {
+    return attention.phase === "stale"
+      ? `${getAgentInstanceLabel(attention)} 可能已中断`
+      : `${getAgentInstanceLabel(attention)} 运行失败`;
+  }
 
-  if (runningProvider) {
-    return `${AGENT_PROVIDER_LABELS[runningProvider]} 正在运行`;
+  const running = lights.filter((instance) => instance.phase === "running");
+  const completed = lights.filter((instance) => instance.phase === "completed");
+
+  if (running.length > 0 && completed.length > 0) {
+    return `${running.map(getAgentInstanceLabel).join(" · ")} 正在运行 · ${completed.length} 个已完成`;
+  }
+
+  if (running.length > 0) {
+    return `${running.map(getAgentInstanceLabel).join(" · ")} 正在运行`;
+  }
+
+  if (completed.length > 0) {
+    return `${completed.map(getAgentInstanceLabel).join(" · ")} 已完成`;
   }
 
   return "AI Agent 空闲或已完成";
@@ -521,6 +655,16 @@ function normalizeSettings(
       Number(settings?.pulseBrightness ?? DEFAULT_SETTINGS.pulseBrightness),
       50,
       160,
+    ),
+    agentCompletedRetentionMinutes: Math.round(
+      clamp(
+        Number(
+          settings?.agentCompletedRetentionMinutes ??
+            DEFAULT_SETTINGS.agentCompletedRetentionMinutes,
+        ),
+        AGENT_COMPLETED_RETENTION_MINUTES_MIN,
+        AGENT_COMPLETED_RETENTION_MINUTES_MAX,
+      ),
     ),
     islandBackgroundColor: getColorSetting(
       settings?.islandBackgroundColor,
@@ -800,12 +944,14 @@ function IslandShell({
   mediaState,
   agentVisualState,
   agentStatusLabel,
+  agentLightInstances,
   onOpenPage,
   onCollapse,
   onMinimize,
   onTuck,
   onReveal,
   onPageChange,
+  onIslandDragEnd,
   children,
 }: IslandShellProps) {
   const isExpanded = mode === "expanded";
@@ -820,10 +966,6 @@ function IslandShell({
   ]
     .filter(Boolean)
     .join(" ");
-  const pulseClassName = [
-    "island__pulse",
-    `island__pulse--agent-${agentVisualState}`,
-  ].join(" ");
   const agentStatusIconClassName = [
     "island__agent-status-icon",
     `island__agent-status-icon--${agentVisualState}`,
@@ -831,42 +973,170 @@ function IslandShell({
   const collapsedLabel = activeTaskTitle
     ? `正在专注：${activeTaskTitle}`
     : "FocuSD Island";
+  const dragSessionRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    dragging: boolean;
+    suppressClick: boolean;
+  } | null>(null);
+
+  const handleCollapsedPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      dragSessionRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        dragging: false,
+        suppressClick: false,
+      };
+    },
+    [],
+  );
+
+  const handleCollapsedPointerMove = useCallback(
+    async (event: ReactPointerEvent<HTMLElement>) => {
+      const session = dragSessionRef.current;
+      if (!session || session.pointerId !== event.pointerId || session.dragging) {
+        return;
+      }
+
+      const distance = Math.hypot(
+        event.clientX - session.startX,
+        event.clientY - session.startY,
+      );
+      if (distance < DRAG_THRESHOLD_PX) {
+        return;
+      }
+
+      session.dragging = true;
+      session.suppressClick = true;
+
+      try {
+        await getCurrentWindow().startDragging();
+      } catch (error) {
+        console.error("Failed to start island dragging", error);
+      }
+    },
+    [],
+  );
+
+  const finishCollapsedDrag = useCallback(
+    (pointerId: number) => {
+      const session = dragSessionRef.current;
+      if (!session || session.pointerId !== pointerId) {
+        return;
+      }
+
+      if (session.dragging) {
+        onIslandDragEnd();
+      }
+
+      window.setTimeout(() => {
+        if (dragSessionRef.current?.pointerId === pointerId) {
+          dragSessionRef.current = null;
+        }
+      }, 0);
+    },
+    [onIslandDragEnd],
+  );
+
+  const openPageFromCollapsed = useCallback(
+    (nextPage: IslandPage, event?: { stopPropagation: () => void }) => {
+      event?.stopPropagation();
+      if (dragSessionRef.current?.suppressClick) {
+        dragSessionRef.current = null;
+        return;
+      }
+      onOpenPage(nextPage);
+    },
+    [onOpenPage],
+  );
+
+  const renderedLights =
+    agentLightInstances.length > 0
+      ? agentLightInstances
+      : [
+          {
+            id: "idle",
+            provider: "codex" as AgentProvider,
+            displayIndex: 1,
+            phase: "idle" as AgentTaskPhase,
+            updatedAt: 0,
+          },
+        ];
 
   return (
     <section
       className={className}
       aria-label={collapsedLabel}
-      onClick={() => {
-        if (!isExpanded) {
-          onOpenPage(page);
-        }
-      }}
       onMouseEnter={() => {
         if (isTucked) {
           onReveal();
         }
       }}
     >
-      <div className="island__collapsed" aria-hidden={isExpanded}>
-        <span className={pulseClassName} title={agentStatusLabel} />
-        {showTitle && <span className="island__brand">FocuSD</span>}
-        {activeTaskTitle ? (
-          <span className="island__active-task">
-            {showTitle ? "· " : ""}
-            {activeTaskTitle}
-          </span>
-        ) : (
-          <span className="island__todo-count">
-            {showTitle ? "· " : ""}
-            剩余{pendingTodoCount}个待办
-          </span>
-        )}
+      <div
+        className="island__collapsed"
+        aria-hidden={isExpanded}
+        onPointerDown={handleCollapsedPointerDown}
+        onPointerMove={(event) => {
+          void handleCollapsedPointerMove(event);
+        }}
+        onPointerUp={(event) => finishCollapsedDrag(event.pointerId)}
+        onPointerCancel={(event) => finishCollapsedDrag(event.pointerId)}
+      >
+        <button
+          className="island__agent-lights"
+          type="button"
+          title={agentStatusLabel}
+          aria-label={`打开 Agent 面板：${agentStatusLabel}`}
+          onClick={(event) => openPageFromCollapsed("agent", event)}
+        >
+          {renderedLights.map((instance) => {
+            const visual = getAgentInstanceVisualState(instance.phase);
+            return (
+              <span
+                key={`${instance.provider}-${instance.id}`}
+                className={`island__pulse island__pulse--agent-${visual}`}
+                title={
+                  instance.id === "idle"
+                    ? agentStatusLabel
+                    : `${getAgentInstanceLabel(instance)} · ${getAgentPhaseLabel(instance.phase)}`
+                }
+              />
+            );
+          })}
+        </button>
+        <button
+          className="island__todo-hotspot"
+          type="button"
+          title={activeTaskTitle ? `打开待办：${activeTaskTitle}` : "打开待办"}
+          aria-label={
+            activeTaskTitle
+              ? `打开待办，当前专注 ${activeTaskTitle}`
+              : `打开待办，剩余 ${pendingTodoCount} 个`
+          }
+          onClick={(event) => openPageFromCollapsed("todo", event)}
+        >
+          {activeTaskTitle ? (
+            <span className="island__active-task">{activeTaskTitle}</span>
+          ) : (
+            <span className="island__todo-count">
+              剩余{pendingTodoCount}个待办
+            </span>
+          )}
+        </button>
         <MusicWaveButton
           isAvailable={mediaState.available || mediaState.audioActive}
           isPlaying={isMusicPlaying}
           audioPeak={mediaState.audioPeak}
           label="打开音乐控制"
-          onClick={() => onOpenPage("music")}
+          onClick={() => openPageFromCollapsed("music")}
         />
         <button
           className="island__quiet-button"
@@ -881,7 +1151,15 @@ function IslandShell({
       </div>
 
       <div className="island__expanded" aria-hidden={!isExpanded}>
-        <header className="island__header">
+        <header
+          className="island__header"
+          onPointerDown={handleCollapsedPointerDown}
+          onPointerMove={(event) => {
+            void handleCollapsedPointerMove(event);
+          }}
+          onPointerUp={(event) => finishCollapsedDrag(event.pointerId)}
+          onPointerCancel={(event) => finishCollapsedDrag(event.pointerId)}
+        >
           <div className="island__title">
             <CircleDot
               className={agentStatusIconClassName}
@@ -889,13 +1167,20 @@ function IslandShell({
               strokeWidth={2.2}
               aria-label={agentStatusLabel}
             />
-            <span>FocuSD</span>
+            <span>
+              {page === "todo"
+                ? "Todo"
+                : page === "music"
+                  ? "Music"
+                  : page === "clipboard"
+                    ? "Clipboard"
+                    : page === "agent"
+                      ? "Agent"
+                      : "Settings"}
+            </span>
           </div>
 
-          <div
-            className="editor-dots"
-            aria-label="岛屿编辑"
-          >
+          <div className="editor-dots" aria-label="岛屿页面">
             <button
               className={`dot-button dot-button--todo ${
                 page === "todo" ? "dot-button--active" : ""
@@ -903,6 +1188,7 @@ function IslandShell({
               type="button"
               title="任务清单"
               aria-label="任务清单"
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
                 onPageChange("todo");
@@ -915,6 +1201,7 @@ function IslandShell({
               type="button"
               title="Music"
               aria-label="Music"
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
                 onPageChange("music");
@@ -927,9 +1214,23 @@ function IslandShell({
               type="button"
               title="剪贴板历史"
               aria-label="剪贴板历史"
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
                 onPageChange("clipboard");
+              }}
+            />
+            <button
+              className={`dot-button dot-button--agent ${
+                page === "agent" ? "dot-button--active" : ""
+              }`}
+              type="button"
+              title="Agent"
+              aria-label="Agent"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onPageChange("agent");
               }}
             />
             <button
@@ -939,6 +1240,7 @@ function IslandShell({
               type="button"
               title="布局编辑"
               aria-label="布局编辑"
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
                 onPageChange("layout");
@@ -946,10 +1248,7 @@ function IslandShell({
             />
           </div>
 
-          <div
-            className="island__collapse-target"
-            onClick={onCollapse}
-          />
+          <div className="island__collapse-target" onClick={onCollapse} />
 
           <div className="window-actions">
             <button
@@ -1196,14 +1495,16 @@ function LayoutEditor({
   focusClipboardShortcutToken,
   presets,
   launchAtStartup,
+  useFreePosition,
   agentStatus,
-  clearingAgentProvider,
+  clearingAgentKey,
   agentHooksInstallState,
   agentHooksInstallResult,
   agentHooksInstallError,
   onSettingsChange,
   onClipboardSettingsChange,
   onReset,
+  onResetIslandPosition,
   onSaveDirectoryDraftChange,
   onSaveDirectory,
   onSavePreset,
@@ -1223,14 +1524,16 @@ function LayoutEditor({
   focusClipboardShortcutToken: number;
   presets: IslandPreset[];
   launchAtStartup: boolean;
+  useFreePosition: boolean;
   agentStatus: AgentStatusSnapshot;
-  clearingAgentProvider: AgentProvider | null;
+  clearingAgentKey: string | null;
   agentHooksInstallState: AgentHooksInstallState;
   agentHooksInstallResult: AgentHooksInstallResult | null;
   agentHooksInstallError: string;
   onSettingsChange: (settings: IslandSettings) => void;
   onClipboardSettingsChange: (settings: ClipboardHistorySettings) => void;
   onReset: () => void;
+  onResetIslandPosition: () => void;
   onSaveDirectoryDraftChange: (value: string) => void;
   onSaveDirectory: () => void;
   onSavePreset: () => void;
@@ -1238,7 +1541,10 @@ function LayoutEditor({
   onRenamePreset: (presetId: string, name: string) => void;
   onDeletePreset: (presetId: string) => void;
   onLaunchAtStartupChange: (enabled: boolean) => void;
-  onClearAgentStatus: (provider: AgentProvider) => void;
+  onClearAgentStatus: (target: {
+    provider?: AgentProvider;
+    instanceId?: string;
+  }) => void;
   onInstallAgentHooks: () => void;
   onClipboardShortcutFocusHandled: () => void;
 }) {
@@ -1336,17 +1642,22 @@ function LayoutEditor({
     [clipboardSettings, isRecordingShortcut, onClipboardSettingsChange],
   );
 
-  const agentStatusRows = AGENT_PROVIDERS.map((provider) => {
-    const status = agentStatus[provider];
-    return {
-      provider,
-      label: AGENT_PROVIDER_LABELS[provider],
-      phase: status.phase,
-      phaseLabel: getAgentPhaseLabel(status.phase),
-      needsAttention: isAgentAttentionPhase(status.phase),
-    };
-  });
-  const agentStatusLabel = getAgentStatusLabel(agentStatus);
+  const agentStatusRows = getAgentLightInstances(
+    agentStatus,
+    settings.agentCompletedRetentionMinutes,
+  ).map((instance) => ({
+    key: `${instance.provider}:${instance.id}`,
+    provider: instance.provider,
+    instanceId: instance.id,
+    label: getAgentInstanceLabel(instance),
+    phase: instance.phase,
+    phaseLabel: getAgentPhaseLabel(instance.phase),
+    needsAttention: isAgentAttentionPhase(instance.phase),
+  }));
+  const agentStatusLabel = getAgentStatusLabel(
+    agentStatus,
+    settings.agentCompletedRetentionMinutes,
+  );
 
   return (
     <div className="editor-panel">
@@ -1394,15 +1705,26 @@ function LayoutEditor({
           suffix="px"
           onChange={(marginY) => onSettingsChange({ ...settings, marginY })}
         />
+        <div className="settings-inline-row">
+          <span className="settings-inline-row__label">
+            位置模式：{useFreePosition ? "自由定位" : "顶部居中"}
+          </span>
+          <button
+            className="agent-hooks-button"
+            type="button"
+            title="重置到顶部居中"
+            aria-label="重置岛屿位置到顶部居中"
+            disabled={!useFreePosition}
+            onClick={onResetIslandPosition}
+          >
+            <RefreshCcw size={13} strokeWidth={2.4} />
+            <span>重置位置</span>
+          </button>
+        </div>
         <ToggleControl
           label="开机自启动"
           checked={launchAtStartup}
           onChange={onLaunchAtStartupChange}
-        />
-        <ToggleControl
-          label="展示“title”"
-          checked={settings.showTitle}
-          onChange={(showTitle) => onSettingsChange({ ...settings, showTitle })}
         />
       </section>
 
@@ -1456,10 +1778,22 @@ function LayoutEditor({
             </span>
           </button>
         </div>
+        <SliderControl
+          label="完成灯保留"
+          value={settings.agentCompletedRetentionMinutes}
+          min={AGENT_COMPLETED_RETENTION_MINUTES_MIN}
+          max={AGENT_COMPLETED_RETENTION_MINUTES_MAX}
+          step={1}
+          suffix="分钟"
+          onChange={(agentCompletedRetentionMinutes) =>
+            onSettingsChange({ ...settings, agentCompletedRetentionMinutes })
+          }
+        />
+
         <div
           className={[
             "agent-status-panel",
-            `agent-status-panel--${getAgentVisualState(agentStatus)}`,
+            `agent-status-panel--${getAgentVisualState(agentStatus, settings.agentCompletedRetentionMinutes)}`,
           ].join(" ")}
         >
           <div className="agent-status-panel__summary">
@@ -1467,37 +1801,47 @@ function LayoutEditor({
             <strong>{agentStatusLabel}</strong>
           </div>
           <div className="agent-status-panel__rows">
-            {agentStatusRows.map((row) => (
-              <div
-                className={[
-                  "agent-status-row",
-                  row.needsAttention ? "agent-status-row--attention" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                key={row.provider}
-              >
-                <span>{row.label}</span>
-                <strong>{row.phaseLabel}</strong>
-                {row.needsAttention ? (
-                  <button
-                    className="agent-status-clear-button"
-                    type="button"
-                    disabled={clearingAgentProvider === row.provider}
-                    title={`清除 ${row.label} 状态`}
-                    aria-label={`清除 ${row.label} 状态`}
-                    onClick={() => onClearAgentStatus(row.provider)}
-                  >
-                    <X size={12} strokeWidth={2.4} />
-                    <span>
-                      {clearingAgentProvider === row.provider
-                        ? "清除中"
-                        : "清除状态"}
-                    </span>
-                  </button>
-                ) : null}
+            {agentStatusRows.length === 0 ? (
+              <div className="agent-status-row">
+                <span>暂无实例</span>
+                <strong>空闲</strong>
               </div>
-            ))}
+            ) : (
+              agentStatusRows.map((row) => (
+                <div
+                  className={[
+                    "agent-status-row",
+                    row.needsAttention ? "agent-status-row--attention" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={row.key}
+                >
+                  <span>{row.label}</span>
+                  <strong>{row.phaseLabel}</strong>
+                  {row.phase !== "idle" ? (
+                    <button
+                      className="agent-status-clear-button"
+                      type="button"
+                      disabled={clearingAgentKey === row.key}
+                      title={`清除 ${row.label} 状态`}
+                      aria-label={`清除 ${row.label} 状态`}
+                      onClick={() =>
+                        onClearAgentStatus({
+                          provider: row.provider,
+                          instanceId: row.instanceId,
+                        })
+                      }
+                    >
+                      <X size={12} strokeWidth={2.4} />
+                      <span>
+                        {clearingAgentKey === row.key ? "清除中" : "清除状态"}
+                      </span>
+                    </button>
+                  ) : null}
+                </div>
+              ))
+            )}
           </div>
         </div>
         {agentHooksInstallState === "installed" && agentHooksInstallResult ? (
@@ -2918,6 +3262,140 @@ function ClipboardHistoryPanel({
   );
 }
 
+function AgentPanel({
+  agentStatus,
+  completedRetentionMinutes,
+  clearingAgentKey,
+  agentHooksInstallState,
+  agentHooksInstallResult,
+  agentHooksInstallError,
+  onClearAgentStatus,
+  onInstallAgentHooks,
+}: {
+  agentStatus: AgentStatusSnapshot;
+  completedRetentionMinutes: number;
+  clearingAgentKey: string | null;
+  agentHooksInstallState: AgentHooksInstallState;
+  agentHooksInstallResult: AgentHooksInstallResult | null;
+  agentHooksInstallError: string;
+  onClearAgentStatus: (target: {
+    provider?: AgentProvider;
+    instanceId?: string;
+  }) => void;
+  onInstallAgentHooks: () => void;
+}) {
+  const activeInstances = getAgentLightInstances(
+    agentStatus,
+    completedRetentionMinutes,
+  );
+  const summary = getAgentStatusLabel(agentStatus, completedRetentionMinutes);
+
+  return (
+    <section className="agent-panel">
+      <div className="agent-panel__header">
+        <div>
+          <span className="agent-panel__eyebrow">AI Agents</span>
+          <strong className="agent-panel__summary">{summary}</strong>
+        </div>
+        <button
+          className={[
+            "agent-hooks-button",
+            agentHooksInstallState === "installed"
+              ? "agent-hooks-button--installed"
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          type="button"
+          disabled={agentHooksInstallState === "installing"}
+          onClick={onInstallAgentHooks}
+        >
+          {agentHooksInstallState === "installed" ? (
+            <Check size={13} strokeWidth={2.6} />
+          ) : (
+            <RefreshCcw size={13} strokeWidth={2.4} />
+          )}
+          <span>
+            {agentHooksInstallState === "installing"
+              ? "安装中"
+              : agentHooksInstallState === "installed"
+                ? "已安装"
+                : "安装/修复"}
+          </span>
+        </button>
+      </div>
+
+      <div className="agent-panel__list">
+        {activeInstances.length === 0 ? (
+          <div className="agent-panel__empty">当前没有正在工作的 Agent</div>
+        ) : (
+          activeInstances.map((instance) => {
+            const key = `${instance.provider}:${instance.id}`;
+            const visual = getAgentInstanceVisualState(instance.phase);
+            return (
+              <article
+                className={`agent-panel__item agent-panel__item--${visual}`}
+                key={key}
+              >
+                <div className="agent-panel__item-main">
+                  <span
+                    className={`island__pulse island__pulse--agent-${visual}`}
+                  />
+                  <div>
+                    <strong>{getAgentInstanceLabel(instance)}</strong>
+                    {instance.displayName ? (
+                      <span
+                        className="agent-panel__thread-name"
+                        title={instance.displayName}
+                      >
+                        {instance.displayName}
+                      </span>
+                    ) : null}
+                    <span>
+                      {AGENT_PROVIDER_LABELS[instance.provider]} ·{" "}
+                      {getAgentPhaseLabel(instance.phase)}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  className="agent-status-clear-button"
+                  type="button"
+                  disabled={clearingAgentKey === key}
+                  title={`清除 ${getAgentInstanceLabel(instance)}`}
+                  aria-label={`清除 ${getAgentInstanceLabel(instance)}`}
+                  onClick={() =>
+                    onClearAgentStatus({
+                      provider: instance.provider,
+                      instanceId: instance.id,
+                    })
+                  }
+                >
+                  <X size={12} strokeWidth={2.4} />
+                  <span>{clearingAgentKey === key ? "清除中" : "清除"}</span>
+                </button>
+              </article>
+            );
+          })
+        )}
+      </div>
+
+      {agentHooksInstallState === "installed" && agentHooksInstallResult ? (
+        <div className="agent-hooks-status agent-hooks-status--ok">
+          <span>状态文件</span>
+          <strong title={agentHooksInstallResult.statusPath}>
+            {agentHooksInstallResult.statusPath}
+          </strong>
+        </div>
+      ) : null}
+      {agentHooksInstallState === "error" ? (
+        <div className="agent-hooks-status agent-hooks-status--error">
+          {agentHooksInstallError}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function App() {
   const [mode, setMode] = useState<IslandMode>("collapsed");
   const [isTucked, setIsTucked] = useState(false);
@@ -2926,6 +3404,7 @@ function App() {
     useState<MediaState>(DEFAULT_MEDIA_STATE);
   const [agentStatus, setAgentStatus] =
     useState<AgentStatusSnapshot>(DEFAULT_AGENT_STATUS);
+  const [useFreePosition, setUseFreePosition] = useState(false);
   const isRefreshingAgentStatus = useRef(false);
   const mediaStatusLockUntil = useRef(0);
   const [settings, setSettings] = useState<IslandSettings>(loadSettings);
@@ -2958,8 +3437,7 @@ function App() {
   const [agentHooksInstallResult, setAgentHooksInstallResult] =
     useState<AgentHooksInstallResult | null>(null);
   const [agentHooksInstallError, setAgentHooksInstallError] = useState("");
-  const [clearingAgentProvider, setClearingAgentProvider] =
-    useState<AgentProvider | null>(null);
+  const [clearingAgentKey, setClearingAgentKey] = useState<string | null>(null);
   const [focusClipboardShortcutToken, setFocusClipboardShortcutToken] =
     useState(0);
   const clipboardShortcutToggleAt = useRef(0);
@@ -2996,7 +3474,9 @@ function App() {
         ? MUSIC_EXPANDED_ISLAND_HEIGHT
         : page === "clipboard"
           ? CLIPBOARD_EXPANDED_ISLAND_HEIGHT
-          : EDITOR_EXPANDED_ISLAND_HEIGHT;
+          : page === "agent"
+            ? AGENT_EXPANDED_ISLAND_HEIGHT
+            : EDITOR_EXPANDED_ISLAND_HEIGHT;
   const layoutSync = useRef<{
     frame: number | null;
     inFlight: boolean;
@@ -3143,7 +3623,7 @@ function App() {
     isRefreshingAgentStatus.current = true;
     try {
       const snapshot = await invoke<AgentStatusSnapshot>("get_agent_status");
-      setAgentStatus(snapshot);
+      setAgentStatus(normalizeAgentStatusSnapshot(snapshot));
     } catch (error) {
       console.error("Failed to read agent status", error);
       setAgentStatus(DEFAULT_AGENT_STATUS);
@@ -3152,17 +3632,53 @@ function App() {
     }
   }, []);
 
-  const clearAgentStatus = useCallback(async (provider: AgentProvider) => {
-    setClearingAgentProvider(provider);
+  const clearAgentStatus = useCallback(
+    async (target: { provider?: AgentProvider; instanceId?: string }) => {
+      const key = `${target.provider ?? ""}:${target.instanceId ?? ""}`;
+      setClearingAgentKey(key);
+      try {
+        const snapshot = await invoke<AgentStatusSnapshot>("clear_agent_status", {
+          provider: target.provider ?? null,
+          instanceId: target.instanceId ?? null,
+        });
+        setAgentStatus(normalizeAgentStatusSnapshot(snapshot));
+      } catch (error) {
+        console.error("Failed to clear agent status", error);
+      } finally {
+        setClearingAgentKey(null);
+      }
+    },
+    [],
+  );
+
+  const captureIslandFreePosition = useCallback(async () => {
     try {
-      const snapshot = await invoke<AgentStatusSnapshot>("clear_agent_status", {
-        provider,
-      });
-      setAgentStatus(snapshot);
+      const position = await invoke<IslandPositionSnapshot>(
+        "capture_island_free_position",
+      );
+      setUseFreePosition(position.useFreePosition);
     } catch (error) {
-      console.error("Failed to clear agent status", error);
-    } finally {
-      setClearingAgentProvider(null);
+      console.error("Failed to capture island free position", error);
+    }
+  }, []);
+
+  const resetIslandPosition = useCallback(async () => {
+    try {
+      const position = await invoke<IslandPositionSnapshot>(
+        "reset_island_position",
+      );
+      setUseFreePosition(position.useFreePosition);
+    } catch (error) {
+      console.error("Failed to reset island position", error);
+    }
+  }, []);
+
+  const refreshIslandPosition = useCallback(async () => {
+    try {
+      const position = await invoke<IslandPositionSnapshot>("get_island_position");
+      setUseFreePosition(position.useFreePosition);
+    } catch (error) {
+      console.error("Failed to read island position", error);
     }
   }, []);
 
@@ -3810,6 +4326,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    void refreshIslandPosition();
+  }, [refreshIslandPosition]);
+
+  useEffect(() => {
     void refreshClipboardHistory();
 
     let unlistenChanges: (() => void) | null = null;
@@ -4131,12 +4651,16 @@ function App() {
     [todos],
   );
   const agentVisualState = useMemo(
-    () => getAgentVisualState(agentStatus),
-    [agentStatus],
+    () => getAgentVisualState(agentStatus, settings.agentCompletedRetentionMinutes),
+    [agentStatus, settings.agentCompletedRetentionMinutes],
   );
   const agentStatusLabel = useMemo(
-    () => getAgentStatusLabel(agentStatus),
-    [agentStatus],
+    () => getAgentStatusLabel(agentStatus, settings.agentCompletedRetentionMinutes),
+    [agentStatus, settings.agentCompletedRetentionMinutes],
+  );
+  const agentLightInstances = useMemo(
+    () => getAgentLightInstances(agentStatus, settings.agentCompletedRetentionMinutes),
+    [agentStatus, settings.agentCompletedRetentionMinutes],
   );
 
   return (
@@ -4151,12 +4675,16 @@ function App() {
         mediaState={mediaState}
         agentVisualState={agentVisualState}
         agentStatusLabel={agentStatusLabel}
+        agentLightInstances={agentLightInstances}
         onOpenPage={openIslandPage}
         onCollapse={collapseIsland}
         onMinimize={minimizeIsland}
         onTuck={tuckIsland}
         onReveal={revealIsland}
         onPageChange={setPage}
+        onIslandDragEnd={() => {
+          void captureIslandFreePosition();
+        }}
       >
         {page === "layout" && (
           <LayoutEditor
@@ -4168,14 +4696,18 @@ function App() {
             focusClipboardShortcutToken={focusClipboardShortcutToken}
             presets={settingPresets}
             launchAtStartup={launchAtStartup}
+            useFreePosition={useFreePosition}
             agentStatus={agentStatus}
-            clearingAgentProvider={clearingAgentProvider}
+            clearingAgentKey={clearingAgentKey}
             agentHooksInstallState={agentHooksInstallState}
             agentHooksInstallResult={agentHooksInstallResult}
             agentHooksInstallError={agentHooksInstallError}
             onSettingsChange={setSettings}
             onClipboardSettingsChange={updateClipboardSettings}
             onReset={resetSettings}
+            onResetIslandPosition={() => {
+              void resetIslandPosition();
+            }}
             onSaveDirectoryDraftChange={setSaveDirectoryDraft}
             onSaveDirectory={saveDirectoryFromEditor}
             onSavePreset={saveSettingsPreset}
@@ -4183,7 +4715,9 @@ function App() {
             onRenamePreset={renameSettingsPreset}
             onDeletePreset={deleteSettingsPreset}
             onLaunchAtStartupChange={updateLaunchAtStartup}
-            onClearAgentStatus={clearAgentStatus}
+            onClearAgentStatus={(target) => {
+              void clearAgentStatus(target);
+            }}
             onInstallAgentHooks={installAgentHooks}
             onClipboardShortcutFocusHandled={clearClipboardShortcutFocus}
           />
@@ -4203,6 +4737,20 @@ function App() {
             onToggleFavorite={(id) => void toggleClipboardHistoryFavorite(id)}
             onDeleteItem={(id) => void deleteClipboardHistoryItem(id)}
             onClear={() => void clearClipboardHistoryItems()}
+          />
+        )}
+        {page === "agent" && (
+          <AgentPanel
+            agentStatus={agentStatus}
+            completedRetentionMinutes={settings.agentCompletedRetentionMinutes}
+            clearingAgentKey={clearingAgentKey}
+            agentHooksInstallState={agentHooksInstallState}
+            agentHooksInstallResult={agentHooksInstallResult}
+            agentHooksInstallError={agentHooksInstallError}
+            onClearAgentStatus={(target) => {
+              void clearAgentStatus(target);
+            }}
+            onInstallAgentHooks={installAgentHooks}
           />
         )}
         {page === "todo" && (
@@ -4240,3 +4788,28 @@ function App() {
 }
 
 export default App;
+
+/*
+=== 修改记录 ===
+[修改编号]: 1
+[修改日期]: 2026-07-21
+[修改类型]: 新增功能
+[主要内容]:
+- 折叠胶囊分区点击：状态灯→Agent、待办区→Todo、音乐→Music
+- 新增 Agent 展开页，列表展示多实例 codex(n)/claude(n)
+- 多状态灯渲染（running/stale/failed），空闲显示单绿灯
+- 去掉折叠态 FocuSD 品牌字
+- 胶囊自由拖动并持久化位置，设置中可重置顶部居中
+[修改目的]:
+- 落实多 Agent 识别与胶囊交互改进需求
+[影响范围]:
+- App.tsx 页面路由、状态模型、IslandShell、设置页与 Agent 页
+
+编号2：修改
+主要修改内容：Agent 完成状态默认保留30分钟，支持0–1440分钟设置；运行、完成、异常灯按时间统一过滤并显示正确摘要。
+修改目的：完成一个 Agent 时只改变对应实例状态，并让用户控制完成灯延迟消失时间。
+
+编号3：新增/修改
+主要修改内容：Agent 卡片新增 Codex 自动对话标题展示，并保持同一 session_id 在中断、继续和长任务期间复用同一实例灯。
+修改目的：便于区分并发对话，避免继续对话生成重复灯或把长时间运行误判为异常。
+*/

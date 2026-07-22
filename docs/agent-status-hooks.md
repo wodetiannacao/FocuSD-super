@@ -1,24 +1,36 @@
 # AI Agent Status Hooks
 
-FocuSD can mirror Codex and Claude Code task activity on the collapsed island status light:
+FocuSD can mirror Codex and Claude Code task activity on the collapsed island.
 
-- running task: red
-- completed, idle, or no task: green
-- failed task, or a running marker older than 10 minutes without a stop event: yellow
+## Multi-instance model
 
-Do not use process or CPU detection for this integration. Codex and Claude Code can stay alive while idle, and Claude Code may run inside a VSCode terminal. The reliable path is to wire into lifecycle hooks.
+Each running agent window/session is tracked as a separate instance:
+
+- marker file: `agent-running-{provider}-{instanceId}.flag`
+- hold file: `agent-hold-{provider}-{instanceId}.flag`
+- status file: `agent-status.json` with an `instances` array
+
+Display names look like:
+
+- `codex(1)`
+- `codex(2)`
+- `claude(1)`
+
+Collapsed island lights:
+
+- red: running
+- yellow: failed / stale
+- one green light: idle (no active instances)
 
 ## User Setup
 
-For release users and source builds, use the in-app installer:
-
 1. Open FocuSD Island.
-2. Expand the island and open Settings.
+2. Expand the island and open Settings or the Agent page.
 3. In **AI Agent 状态灯**, click **安装/修复**.
 4. Restart Codex and any VSCode terminal running Claude Code.
 5. For Codex, review and trust the new hooks when Codex prompts you, or use `/hooks`.
 
-The installer writes the hook scripts to the current user's app data directory:
+The installer writes the hook scripts to:
 
 ```text
 %APPDATA%\com.focusd.island\
@@ -31,64 +43,68 @@ It then updates:
 %USERPROFILE%\.claude\settings.json
 ```
 
-The operation is repeatable. Running **安装/修复** again rewrites FocuSD's managed hooks to the current app-data script path and removes older FocuSD hook entries that referenced development paths such as `D:\FocuSD\scripts`.
+Re-running **安装/修复** rewrites managed hooks to the current app-data script path.
 
 ## Runtime Contract
 
-Prompt submission uses a fast marker file instead of PowerShell JSON work:
+Prompt submission creates a per-instance marker quickly:
 
 ```text
-agent-codex-running.flag
-agent-claudeCode-running.flag
+agent-running-codex-<id>.flag
+agent-running-claudeCode-<id>.flag
 ```
 
-FocuSD polls these marker files every 200ms. If either marker exists and is fresh, the island turns red. If a marker is still present after 10 minutes, FocuSD treats it as stale and turns the island yellow instead of leaving the user waiting on a permanent red light.
+FocuSD polls every ~200ms. Multiple markers mean multiple lights.
 
-When the turn finishes, `focusd-agent-status.ps1` removes the marker, writes `agent-status.json`, and keeps a short hold marker when the task completed too quickly. This makes very short prompts still visibly flash red for about 800ms.
+When a turn finishes, `focusd-agent-status.ps1`:
 
-`agent-status.json` uses this shape:
+1. removes one matching running marker (oldest for that provider if no instance id)
+2. updates `agent-status.json`
+3. may keep a short hold marker so very short prompts still flash red (~800ms)
+
+`agent-status.json` shape:
 
 ```json
 {
-  "codex": {
-    "phase": "running",
-    "taskId": "optional-id",
-    "updatedAt": 1783584000000
-  },
-  "claudeCode": {
-    "phase": "completed",
-    "taskId": "optional-id",
-    "updatedAt": 1783584000000
-  },
+  "instances": [
+    {
+      "id": "a1b2c3d4e5f6",
+      "provider": "codex",
+      "displayIndex": 1,
+      "phase": "running",
+      "taskId": "optional-id",
+      "updatedAt": 1783584000000
+    }
+  ],
   "updatedAt": 1783584000000
 }
 ```
 
-`phase === "running"` turns the light red. `phase === "failed"` turns the light yellow. Missing files, invalid JSON, missing fields, unknown phases, `idle`, and `completed` are treated as green states. A derived `stale` phase is returned by the app when a running marker remains for more than 10 minutes without a later status update.
+Legacy single-object files (`codex` / `claudeCode`) and legacy markers
+(`agent-codex-running.flag`) are still read for compatibility.
+
+A running marker older than 10 minutes becomes `stale` (yellow).
 
 ## Manual Smoke Test
-
-After using the in-app installer, run these commands with the app-data scripts:
 
 ```powershell
 $dir = Join-Path $env:APPDATA 'com.focusd.island'
 & "$dir\focusd-agent-running.cmd" codex
-powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\focusd-agent-status.ps1" codex completed
-
+& "$dir\focusd-agent-running.cmd" codex
 & "$dir\focusd-agent-running.cmd" claudeCode
-powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\focusd-agent-status.ps1" claudeCode completed
-
+powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\focusd-agent-status.ps1" codex completed
+powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\focusd-agent-status.ps1" codex completed
 powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\focusd-agent-status.ps1" claudeCode failed
 ```
 
-Expected behavior:
+Expected:
 
-- The island turns red after the `focusd-agent-running.cmd` command.
-- The island returns green after the `focusd-agent-status.ps1 ... completed` command.
-- The island turns yellow after the `focusd-agent-status.ps1 ... failed` command and returns green after clearing that status from the app.
+- two Codex lights after two running starts, plus one Claude light
+- each completed stop removes one Codex light
+- failed Claude stays as attention until cleared
 
-## Notes For Manual Configuration
+## Notes
 
-Manual configuration is usually unnecessary. Prefer the in-app installer because it uses the user's actual app-data path and handles Claude Code's Windows command behavior.
-
-If you do edit Claude Code hooks manually on Windows, prefer Claude Code's exec form: put `cmd.exe` or `powershell.exe` in `command` and pass every argument through `args`. This avoids shell-selection differences between VSCode, Git Bash, PowerShell, and `cmd.exe`.
+- Prefer the in-app installer.
+- On Windows Claude Code hooks, prefer exec form with `cmd.exe` / `powershell.exe` + `args`.
+- After upgrading multi-instance support, reinstall hooks once and re-trust Codex hooks.

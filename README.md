@@ -16,13 +16,18 @@
   </p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-0.1.6-blue">
+    <img alt="Version" src="https://img.shields.io/badge/version-0.1.7-blue">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
     <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6">
   </p>
 </div>
+
+> 本项目基于原作者 [zzliu93-debug/FocuSD](https://github.com/zzliu93-debug/FocuSD) 继续开发。
+> 本仓库由 [wodetiannacao/FocuSD-super](https://github.com/wodetiannacao/FocuSD-super) 维护，
+> 在原项目基础上增加多实例 AI Agent 状态、Claude Code Hook、Hook 自动升级、
+> 自由定位、Codex 会话标题以及相关稳定性修复。
 
 ## 目录
 
