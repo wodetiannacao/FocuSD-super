@@ -317,5 +317,10 @@ pnpm dev
 
 ## 致谢
 
+- 特别感谢原作者 [zzliu93-debug](https://github.com/zzliu93-debug) 将 [FocuSD](https://github.com/zzliu93-debug/FocuSD) 开源，提供了本项目的基础架构、初始功能和开发起点。
+- 本项目基于原作者的 FocuSD 继续开发，当前仓库是 [wodetiannacao/FocuSD-super](https://github.com/wodetiannacao/FocuSD-super)，保留了原项目的 Fork 关系和历史归属。
+- [wodetiannacao](https://github.com/wodetiannacao)：当前 Fork 维护者，负责后续功能扩展、Hook 改进、稳定性修复和文档维护。
 - README 结构参考 [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
 - 感谢所有通过 Issue、PR 和反馈帮助改进 FocuSD Island 的用户
+
+原作者的开源工作是本项目能够继续完善的基础，谨此致谢。
