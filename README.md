@@ -1,7 +1,7 @@
 <div align="center">
   <img src="src-tauri/icons/128x128.png" alt="FocuSD Island Logo" width="96" height="96">
 
-  <h1>FocuSD Island</h1>
+  <h1>FocuSD super</h1>
 
   <p>
     一款 Windows 灵动岛效率工具，把待办、每日笔记、Codex/Claude Code 状态、剪切板历史、媒体控制和窗口定位放在屏幕顶部。
