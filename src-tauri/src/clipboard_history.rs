@@ -41,10 +41,13 @@ use windows::{
 const HISTORY_FILE_NAME: &str = "clipboard-history.json";
 const IMAGE_DIRECTORY_NAME: &str = "clipboard-images";
 const HISTORY_CHANGED_EVENT: &str = "clipboard-history-changed";
-const HOTKEY_EVENT: &str = "clipboard-history-shortcut";
+const CLIPBOARD_HOTKEY_EVENT: &str = "clipboard-history-shortcut";
+const AGENT_HOTKEY_EVENT: &str = "agent-panel-shortcut";
 const MAIN_WINDOW_LABEL: &str = "main";
 const DEFAULT_MAX_ITEMS: usize = 30;
-const DEFAULT_SHORTCUT: &str = "Ctrl+X";
+const DEFAULT_CLIPBOARD_SHORTCUT: &str = "Ctrl+X";
+const DEFAULT_AGENT_SHORTCUT: &str = "Ctrl+Q";
+const AGENT_SHORTCUT_CONFLICT_FALLBACK: &str = "Ctrl+Shift+Q";
 const MIN_MAX_ITEMS: usize = 5;
 const MAX_MAX_ITEMS: usize = 200;
 const SHORT_DUPLICATE_WINDOW_MS: i64 = 2_000;
@@ -53,19 +56,23 @@ const THUMBNAIL_MAX_SIDE: u32 = 128;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const CLIPBOARD_WRITE_RETRY_ATTEMPTS: usize = 8;
 const CLIPBOARD_WRITE_RETRY_DELAY: Duration = Duration::from_millis(35);
-const HOTKEY_ID: i32 = 0x4643;
+const CLIPBOARD_HOTKEY_ID: i32 = 0x4643;
+const AGENT_HOTKEY_ID: i32 = 0x4644;
 const HOTKEY_REFRESH_MESSAGE: u32 = WM_APP + 0x51;
 
 static CLIPBOARD_HISTORY: OnceLock<ClipboardHistoryService> = OnceLock::new();
 static CLIPBOARD_NOTIFY_TX: OnceLock<Mutex<Option<SyncSender<()>>>> = OnceLock::new();
 static CLIPBOARD_HOTKEY_WINDOW: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 static CLIPBOARD_HOTKEY_REGISTERED: OnceLock<Mutex<bool>> = OnceLock::new();
+static AGENT_HOTKEY_REGISTERED: OnceLock<Mutex<bool>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardHistorySnapshot {
     settings: ClipboardHistorySettings,
     items: Vec<ClipboardHistoryItem>,
+    clipboard_shortcut_registered: bool,
+    agent_shortcut_registered: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +83,8 @@ pub struct ClipboardHistorySettings {
     max_items: usize,
     #[serde(default = "default_clipboard_shortcut")]
     shortcut: String,
+    #[serde(default = "default_agent_shortcut")]
+    agent_shortcut: String,
 }
 
 impl Default for ClipboardHistorySettings {
@@ -85,6 +94,7 @@ impl Default for ClipboardHistorySettings {
             capture_images: true,
             max_items: DEFAULT_MAX_ITEMS,
             shortcut: default_clipboard_shortcut(),
+            agent_shortcut: default_agent_shortcut(),
         }
     }
 }
@@ -92,9 +102,22 @@ impl Default for ClipboardHistorySettings {
 impl ClipboardHistorySettings {
     fn normalized(mut self) -> Self {
         self.max_items = self.max_items.clamp(MIN_MAX_ITEMS, MAX_MAX_ITEMS);
-        self.shortcut = parse_shortcut_binding(&self.shortcut)
-            .unwrap_or_else(default_shortcut_binding)
-            .label;
+        let clipboard_binding = parse_shortcut_binding(&self.shortcut)
+            .unwrap_or_else(default_clipboard_shortcut_binding);
+        let mut agent_binding = parse_shortcut_binding(&self.agent_shortcut)
+            .unwrap_or_else(default_agent_shortcut_binding);
+
+        if agent_binding.label == clipboard_binding.label {
+            agent_binding = if clipboard_binding.label != DEFAULT_AGENT_SHORTCUT {
+                default_agent_shortcut_binding()
+            } else {
+                parse_shortcut_binding(AGENT_SHORTCUT_CONFLICT_FALLBACK)
+                    .expect("agent shortcut conflict fallback should be valid")
+            };
+        }
+
+        self.shortcut = clipboard_binding.label;
+        self.agent_shortcut = agent_binding.label;
         self
     }
 }
@@ -106,11 +129,20 @@ struct ShortcutBinding {
 }
 
 fn default_clipboard_shortcut() -> String {
-    DEFAULT_SHORTCUT.to_string()
+    DEFAULT_CLIPBOARD_SHORTCUT.to_string()
 }
 
-fn default_shortcut_binding() -> ShortcutBinding {
-    parse_shortcut_binding(DEFAULT_SHORTCUT).expect("default clipboard shortcut should be valid")
+fn default_agent_shortcut() -> String {
+    DEFAULT_AGENT_SHORTCUT.to_string()
+}
+
+fn default_clipboard_shortcut_binding() -> ShortcutBinding {
+    parse_shortcut_binding(DEFAULT_CLIPBOARD_SHORTCUT)
+        .expect("default clipboard shortcut should be valid")
+}
+
+fn default_agent_shortcut_binding() -> ShortcutBinding {
+    parse_shortcut_binding(DEFAULT_AGENT_SHORTCUT).expect("default Agent shortcut should be valid")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -571,6 +603,8 @@ impl ClipboardHistoryService {
         ClipboardHistorySnapshot {
             settings: state.settings.clone(),
             items: state.items.clone(),
+            clipboard_shortcut_registered: clipboard_hotkey_registered(),
+            agent_shortcut_registered: agent_hotkey_registered(),
         }
     }
 
@@ -578,13 +612,21 @@ impl ClipboardHistoryService {
         let _ = self.app.emit(HISTORY_CHANGED_EVENT, ());
     }
 
-    fn emit_shortcut(&self) {
+    fn focus_main_window(&self) {
         if let Some(window) = self.app.get_webview_window(MAIN_WINDOW_LABEL) {
             let _ = window.show();
             let _ = window.set_focus();
         }
+    }
 
-        let _ = self.app.emit(HOTKEY_EVENT, ());
+    fn emit_clipboard_shortcut(&self) {
+        self.focus_main_window();
+        let _ = self.app.emit(CLIPBOARD_HOTKEY_EVENT, ());
+    }
+
+    fn emit_agent_shortcut(&self) {
+        self.focus_main_window();
+        let _ = self.app.emit(AGENT_HOTKEY_EVENT, ());
     }
 }
 
@@ -821,7 +863,7 @@ fn run_windows_clipboard_listener() -> Result<(), String> {
             DispatchMessageW(&message);
         }
 
-        unregister_current_hotkey(hwnd);
+        unregister_current_hotkeys(hwnd);
         let _ = RemoveClipboardFormatListener(hwnd);
     }
 
@@ -839,9 +881,16 @@ unsafe extern "system" fn clipboard_window_proc(
         return LRESULT(0);
     }
 
-    if message == WM_HOTKEY && wparam.0 == HOTKEY_ID as usize {
+    if message == WM_HOTKEY && wparam.0 == CLIPBOARD_HOTKEY_ID as usize {
         if let Ok(service) = service() {
-            service.emit_shortcut();
+            service.emit_clipboard_shortcut();
+        }
+        return LRESULT(0);
+    }
+
+    if message == WM_HOTKEY && wparam.0 == AGENT_HOTKEY_ID as usize {
+        if let Ok(service) = service() {
+            service.emit_agent_shortcut();
         }
         return LRESULT(0);
     }
@@ -856,40 +905,69 @@ unsafe extern "system" fn clipboard_window_proc(
 
 fn refresh_registered_hotkey(hwnd: HWND) {
     unsafe {
-        unregister_current_hotkey(hwnd);
+        unregister_current_hotkeys(hwnd);
 
-        let binding = service()
+        let settings = service()
             .ok()
             .and_then(|service| service.snapshot().ok())
-            .and_then(|snapshot| parse_shortcut_binding(&snapshot.settings.shortcut))
-            .unwrap_or_else(default_shortcut_binding);
+            .map(|snapshot| snapshot.settings)
+            .unwrap_or_default();
+        let clipboard_binding = parse_shortcut_binding(&settings.shortcut)
+            .unwrap_or_else(default_clipboard_shortcut_binding);
+        let agent_binding = parse_shortcut_binding(&settings.agent_shortcut)
+            .unwrap_or_else(default_agent_shortcut_binding);
 
         match RegisterHotKey(
             Some(hwnd),
-            HOTKEY_ID,
-            HOT_KEY_MODIFIERS(binding.modifiers | MOD_NOREPEAT.0),
-            binding.key_code,
+            CLIPBOARD_HOTKEY_ID,
+            HOT_KEY_MODIFIERS(clipboard_binding.modifiers | MOD_NOREPEAT.0),
+            clipboard_binding.key_code,
         ) {
-            Ok(()) => set_hotkey_registered(true),
+            Ok(()) => set_clipboard_hotkey_registered(true),
             Err(error) => {
-                set_hotkey_registered(false);
+                set_clipboard_hotkey_registered(false);
                 eprintln!(
                     "failed to register clipboard history shortcut {}: {error}",
-                    binding.label
+                    clipboard_binding.label
                 );
             }
+        }
+
+        match RegisterHotKey(
+            Some(hwnd),
+            AGENT_HOTKEY_ID,
+            HOT_KEY_MODIFIERS(agent_binding.modifiers | MOD_NOREPEAT.0),
+            agent_binding.key_code,
+        ) {
+            Ok(()) => set_agent_hotkey_registered(true),
+            Err(error) => {
+                set_agent_hotkey_registered(false);
+                eprintln!(
+                    "failed to register Agent panel shortcut {}: {error}",
+                    agent_binding.label
+                );
+            }
+        }
+
+        if let Ok(service) = service() {
+            service.emit_changed();
         }
     }
 }
 
-unsafe fn unregister_current_hotkey(hwnd: HWND) {
-    if hotkey_registered() {
-        let _ = unsafe { UnregisterHotKey(Some(hwnd), HOTKEY_ID) };
-        set_hotkey_registered(false);
+unsafe fn unregister_current_hotkeys(hwnd: HWND) {
+    if clipboard_hotkey_registered() {
+        let _ = unsafe { UnregisterHotKey(Some(hwnd), CLIPBOARD_HOTKEY_ID) };
+        set_clipboard_hotkey_registered(false);
+    }
+
+    if agent_hotkey_registered() {
+        let _ = unsafe { UnregisterHotKey(Some(hwnd), AGENT_HOTKEY_ID) };
+        set_agent_hotkey_registered(false);
     }
 }
 
-fn hotkey_registered() -> bool {
+fn clipboard_hotkey_registered() -> bool {
     CLIPBOARD_HOTKEY_REGISTERED
         .get_or_init(|| Mutex::new(false))
         .lock()
@@ -897,8 +975,25 @@ fn hotkey_registered() -> bool {
         .unwrap_or(false)
 }
 
-fn set_hotkey_registered(value: bool) {
+fn set_clipboard_hotkey_registered(value: bool) {
     if let Ok(mut registered) = CLIPBOARD_HOTKEY_REGISTERED
+        .get_or_init(|| Mutex::new(false))
+        .lock()
+    {
+        *registered = value;
+    }
+}
+
+fn agent_hotkey_registered() -> bool {
+    AGENT_HOTKEY_REGISTERED
+        .get_or_init(|| Mutex::new(false))
+        .lock()
+        .map(|registered| *registered)
+        .unwrap_or(false)
+}
+
+fn set_agent_hotkey_registered(value: bool) {
+    if let Ok(mut registered) = AGENT_HOTKEY_REGISTERED
         .get_or_init(|| Mutex::new(false))
         .lock()
     {
@@ -1022,3 +1117,35 @@ fn current_unix_millis() -> i64 {
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_settings_include_distinct_clipboard_and_agent_shortcuts() {
+        let settings = ClipboardHistorySettings::default().normalized();
+
+        assert_eq!(settings.shortcut, "Ctrl+X");
+        assert_eq!(settings.agent_shortcut, "Ctrl+Q");
+    }
+
+    #[test]
+    fn duplicate_agent_shortcut_uses_a_safe_fallback() {
+        let settings = ClipboardHistorySettings {
+            shortcut: "Ctrl+Q".to_string(),
+            agent_shortcut: "Ctrl+Q".to_string(),
+            ..ClipboardHistorySettings::default()
+        }
+        .normalized();
+
+        assert_eq!(settings.shortcut, "Ctrl+Q");
+        assert_eq!(settings.agent_shortcut, "Ctrl+Shift+Q");
+    }
+}
+
+/*
+编号1：新增/修改
+主要修改内容：在现有 Win32 消息窗口中新增 Agent 面板全局快捷键，默认 Ctrl+Q；对快捷键冲突进行安全回退，并向前端返回系统注册状态。
+修改目的：让用户在任意应用中快速打开 Agent 面板，同时保持旧剪贴板快捷键与历史设置兼容。
+*/

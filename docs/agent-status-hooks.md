@@ -108,3 +108,5 @@ Expected:
 - Prefer the in-app installer.
 - On Windows Claude Code hooks, prefer exec form with `cmd.exe` / `powershell.exe` + `args`.
 - After upgrading multi-instance support, reinstall hooks once and re-trust Codex hooks.
+- Hook commands use `%APPDATA%` instead of embedding the absolute user-profile
+  path, so Chinese Windows user names are not corrupted by terminal code pages.

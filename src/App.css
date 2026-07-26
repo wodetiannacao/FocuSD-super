@@ -717,6 +717,17 @@ input {
   background: rgba(255, 255, 255, 0.15);
 }
 
+.icon-button--active {
+  color: #0f1714;
+  background: #49e18f;
+  box-shadow: 0 0 0 1px rgba(73, 225, 143, 0.24);
+}
+
+.icon-button--active:hover {
+  color: #0a110e;
+  background: #6de9a6;
+}
+
 .icon-button:active {
   transform: translateY(1px);
 }
@@ -2643,6 +2654,13 @@ input {
   white-space: nowrap;
 }
 
+.shortcut-control__error {
+  color: #ff9b91;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 .shortcut-record-button {
   min-width: 112px;
   height: 32px;
@@ -3109,4 +3127,8 @@ input {
 编号3：新增/修改
 主要修改内容：新增 Agent 自动对话标题的单行省略样式，并限制文字区域宽度。
 修改目的：在展开页显示会话名称，同时避免长标题挤压状态与清除按钮。
+
+编号4：新增/修改
+主要修改内容：新增保持展开图钉的激活态，以及快捷键冲突提示样式。
+修改目的：让锁定状态清晰可见，并在 Agent 与剪贴板快捷键冲突时提供直接反馈。
 */

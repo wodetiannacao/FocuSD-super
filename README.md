@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="src-tauri/icons/128x128.png" alt="FocuSD Island Logo" width="96" height="96">
+  <img src="src-tauri/icons/128x128.png" alt="FocuSD super Logo" width="96" height="96">
 
-  <h1>FocuSD Island</h1>
+  <h1>FocuSD super</h1>
 
   <p>
     一款 Windows 灵动岛效率工具，把待办、每日笔记、Codex/Claude Code 状态、剪切板历史、媒体控制和窗口定位放在屏幕顶部。
@@ -16,7 +16,7 @@
   </p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-0.1.7-blue">
+    <img alt="Version" src="https://img.shields.io/badge/version-0.1.8-blue">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -26,7 +26,7 @@
 
 > 本项目基于原作者 [zzliu93-debug/FocuSD](https://github.com/zzliu93-debug/FocuSD) 继续开发。
 > 当前仓库是由 [wodetiannacao/FocuSD-super](https://github.com/wodetiannacao/FocuSD-super) 维护的独立 Fork，
-> 保留原项目归属，并在 v0.1.6 基础上继续完善到 v0.1.7。
+> 保留原项目归属，并在 v0.1.6 基础上继续完善到 v0.1.8。
 
 ## 目录
 
@@ -46,9 +46,9 @@
 
 ## 关于项目
 
-FocuSD Island 是一个 Windows 优先的桌面效率工具。它以透明、无边框、始终置顶的 Tauri 悬浮岛形式运行，平时停靠在主屏幕顶部，需要时展开为一个紧凑的工作面板。
+FocuSD super 是一个 Windows 优先的桌面效率工具。它以透明、无边框、始终置顶的 Tauri 悬浮岛形式运行，平时停靠在主屏幕顶部，需要时展开为一个紧凑的工作面板。
 
-如果你正在寻找一个适合 Windows 桌面的「灵动岛」工具，FocuSD Island 的目标不是做一个装饰组件，而是把每天最常用、最容易打断注意力的入口收进一个小岛里：今日待办、每日笔记、AI 编程状态、剪切板历史、媒体控制和外观设置。它也适合正在搜索 windows灵动岛、灵动岛 或 Windows Dynamic Island 替代方案的用户。
+如果你正在寻找一个适合 Windows 桌面的「灵动岛」工具，FocuSD super 的目标不是做一个装饰组件，而是把每天最常用、最容易打断注意力的入口收进一个小岛里：今日待办、每日笔记、AI 编程状态、剪切板历史、媒体控制和外观设置。它也适合正在搜索 windows灵动岛、灵动岛 或 Windows Dynamic Island 替代方案的用户。
 
 项目当前处于早期 MVP 阶段，优先适配 Windows。欢迎通过 Issue 和 PR 一起完善它。
 
@@ -63,10 +63,13 @@ FocuSD Island 是一个 Windows 优先的桌面效率工具。它以透明、无
 | AI Agent 状态 | 同时支持 Codex 与 Claude Code 的运行、完成、失败和过期状态。 |
 | 多实例状态灯 | 多个 Agent 会话分别显示为 codex(1)、codex(2)、claude(1) 等独立状态。 |
 | Hook 自动安装/升级 | 自动写入 app-data 脚本，修复旧版内联 Hook，并兼容旧状态文件和旧 marker。 |
+| 中文路径 Hook | Hook 使用 `%APPDATA%` 纯 ASCII 命令入口，兼容中文 Windows 用户名。 |
 | Agent 状态面板 | 查看会话、提供商、阶段和 Codex 会话标题，并可单独清除状态。 |
+| Agent 快捷键 | 默认使用 `Ctrl+Q` 全局打开或收起 Agent 面板，并可在设置中修改。 |
 | 剪切板历史 | 记录文本和图片剪切板内容，支持收藏、复制、删除和清空。 |
 | 媒体控制 | 查看系统音频状态，控制播放/暂停、上一首、下一首。 |
 | 自由定位 | 支持将悬浮岛拖动到自定义位置，并持久化窗口位置。 |
+| 保持展开 | 可使用图钉锁定展开状态，切换到其他窗口时不自动收缩。 |
 | 外观设置 | 调整透明度、缩放、顶部间距、主题色，并保存样式预设。 |
 | 系统集成 | 支持系统托盘菜单和 Windows 当前用户开机自启动。 |
 
@@ -80,10 +83,13 @@ FocuSD Island 是一个 Windows 优先的桌面效率工具。它以透明、无
 | 会话识别 | 使用 session_id 和 turn_id 配对运行事件 | 中断后继续对话不会生成重复灯或幽灵状态 |
 | Hook 入口 | 新增统一 focusd-agent-hook.cmd，集中解析 stdin 并转发状态 | 避免长段内联 PowerShell 在 Codex 中退出码异常 |
 | Hook 升级 | 检测旧版 Hook，自动重写为当前 app-data 脚本路径 | 安装新版后无需手动编辑旧配置 |
+| 中文路径兼容 | Hook 配置改用 `%APPDATA%` 和 `cmd call` | 中文用户名不再被终端代码页转换为乱码 |
 | Hook 兼容 | 兼容旧版单对象状态文件、旧 marker 和旧配置 | 升级时尽量保留已有用户状态 |
 | 状态展示 | 增加完成保留时间、失败/过期提醒、单实例清除 | 可以区分已完成、仍运行和需要处理的会话 |
 | Codex 信息 | 按 session_id 读取 Codex 会话标题 | Agent 面板中能看到更明确的任务名称 |
 | 窗口布局 | 增加自由定位和位置持久化 | 悬浮岛不再只能固定在顶部居中 |
+| 展开交互 | 展开前捕获真实窗口坐标，并支持图钉保持展开 | 在拖动位置原地展开，点击其他窗口时可保持面板 |
+| 快捷键 | 新增可配置 Agent 全局快捷键，默认 `Ctrl+Q` | 可从任意应用快速打开或收起 Agent 面板 |
 | 工程质量 | 增加多实例 Hook 集成测试、PowerShell 解析检查和构建验证 | 后续升级 Hook 时有回归保护 |
 
 ## AI Agent 状态指示灯
@@ -97,7 +103,7 @@ FocuSD Island 是一个 Windows 优先的桌面效率工具。它以透明、无
 
 ### Hook 安装与配置
 
-在 FocuSD Island 中打开 设置 → AI Agent 状态灯，点击 安装/修复。安装器会：
+在 FocuSD super 中打开 设置 → AI Agent 状态灯，点击 安装/修复。安装器会：
 
 1. 将当前版本的 Hook 脚本写入 %APPDATA%\com.focusd.island\。
 2. 更新 %USERPROFILE%\.codex\config.toml。
@@ -145,7 +151,7 @@ Claude Code 使用 Windows exec 形式调用 cmd.exe，并通过 args 传递参�
 
 ## 快速开始
 
-FocuSD Island 支持两种使用方式：直接下载 Release，或者通过源码自行构建。
+FocuSD super 支持两种使用方式：直接下载 Release，或者通过源码自行构建。
 
 ### 方式一：通过 Release 安装
 
@@ -184,7 +190,7 @@ pnpm tauri build
 构建完成后，安装包通常位于：
 
 ```text
-src-tauri/target/release/bundle/nsis/FocuSD Island_0.1.7_x64-setup.exe
+src-tauri/target/release/bundle/nsis/FocuSD Island_0.1.8_x64-setup.exe
 ```
 
 原始可执行文件通常位于：
@@ -321,6 +327,6 @@ pnpm dev
 - 本项目基于原作者的 FocuSD 继续开发，当前仓库是 [wodetiannacao/FocuSD-super](https://github.com/wodetiannacao/FocuSD-super)，保留了原项目的 Fork 关系和历史归属。
 - [wodetiannacao](https://github.com/wodetiannacao)：当前 Fork 维护者，负责后续功能扩展、Hook 改进、稳定性修复和文档维护。
 - README 结构参考 [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
-- 感谢所有通过 Issue、PR 和反馈帮助改进 FocuSD Island 的用户
+- 感谢所有通过 Issue、PR 和反馈帮助改进 FocuSD super 的用户
 
 原作者的开源工作是本项目能够继续完善的基础，谨此致谢。

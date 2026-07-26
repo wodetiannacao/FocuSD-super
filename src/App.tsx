@@ -24,6 +24,7 @@ import {
   Minus,
   NotebookPen,
   Pause,
+  Pin,
   Play,
   Plus,
   RefreshCcw,
@@ -86,6 +87,7 @@ type ClipboardHistorySettings = {
   captureImages: boolean;
   maxItems: number;
   shortcut: string;
+  agentShortcut: string;
 };
 
 type ClipboardHistoryImage = {
@@ -112,6 +114,8 @@ type ClipboardHistoryItem = {
 type ClipboardHistorySnapshot = {
   settings: ClipboardHistorySettings;
   items: ClipboardHistoryItem[];
+  clipboardShortcutRegistered: boolean;
+  agentShortcutRegistered: boolean;
 };
 
 type AudioLevel = {
@@ -163,6 +167,7 @@ type IslandSettings = {
   islandBackgroundColor: string;
   todoBackgroundColor: string;
   showTitle: boolean;
+  keepExpanded: boolean;
   carryOverIncompleteTodos: boolean;
   enableTodoReorder: boolean;
 };
@@ -186,7 +191,9 @@ type IslandShellProps = {
   agentVisualState: AgentVisualState;
   agentStatusLabel: string;
   agentLightInstances: AgentInstance[];
+  keepExpanded: boolean;
   onOpenPage: (page: IslandPage) => void;
+  onKeepExpandedChange: (keepExpanded: boolean) => void;
   onCollapse: () => void;
   onMinimize: () => void;
   onTuck: () => void;
@@ -219,6 +226,7 @@ const TODO_SCROLL_START_ROWS = 6;
 const MAX_CUSTOM_SETTING_PRESETS = 6;
 const DEFAULT_TASK_TEXT_COLOR = "#1afbff";
 const DEFAULT_CLIPBOARD_SHORTCUT = "Ctrl+X";
+const DEFAULT_AGENT_SHORTCUT = "Ctrl+Q";
 const AUDIO_ACTIVE_THRESHOLD = 0.000015;
 const DEFAULT_MEDIA_STATE: MediaState = {
   available: false,
@@ -251,8 +259,11 @@ const DEFAULT_CLIPBOARD_HISTORY: ClipboardHistorySnapshot = {
     captureImages: true,
     maxItems: 30,
     shortcut: DEFAULT_CLIPBOARD_SHORTCUT,
+    agentShortcut: DEFAULT_AGENT_SHORTCUT,
   },
   items: [],
+  clipboardShortcutRegistered: false,
+  agentShortcutRegistered: false,
 };
 const DEFAULT_SETTINGS: IslandSettings = {
   opacity: 95,
@@ -265,6 +276,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   agentCompletedRetentionMinutes: 30,
   todoBackgroundColor: "#ffffff",
   showTitle: true,
+  keepExpanded: false,
   carryOverIncompleteTodos: false,
   enableTodoReorder: false,
 };
@@ -544,11 +556,14 @@ function buildShortcutFromEvent(event: ShortcutKeyboardEvent) {
   return parts.join("+");
 }
 
-function normalizeClipboardShortcut(shortcut: string | undefined) {
+function normalizeShortcut(
+  shortcut: string | undefined,
+  fallback: string,
+) {
   const text = shortcut?.trim();
 
   if (!text) {
-    return DEFAULT_CLIPBOARD_SHORTCUT;
+    return fallback;
   }
 
   const parts = text
@@ -581,13 +596,21 @@ function normalizeClipboardShortcut(shortcut: string | undefined) {
   }
 
   if (!keyLabel || modifiers.size === 0) {
-    return DEFAULT_CLIPBOARD_SHORTCUT;
+    return fallback;
   }
 
   return ["Ctrl", "Alt", "Shift", "Win"]
     .filter((modifier) => modifiers.has(modifier))
     .concat(keyLabel)
     .join("+");
+}
+
+function normalizeClipboardShortcut(shortcut: string | undefined) {
+  return normalizeShortcut(shortcut, DEFAULT_CLIPBOARD_SHORTCUT);
+}
+
+function normalizeAgentShortcut(shortcut: string | undefined) {
+  return normalizeShortcut(shortcut, DEFAULT_AGENT_SHORTCUT);
 }
 
 function normalizeClipboardSettings(
@@ -597,6 +620,7 @@ function normalizeClipboardSettings(
     ...settings,
     maxItems: clamp(Math.round(settings.maxItems), 5, 200),
     shortcut: normalizeClipboardShortcut(settings.shortcut),
+    agentShortcut: normalizeAgentShortcut(settings.agentShortcut),
   };
 }
 
@@ -611,6 +635,17 @@ function matchesClipboardShortcut(
   return (
     buildShortcutFromEvent(event) === normalizeClipboardShortcut(shortcut)
   );
+}
+
+function matchesAgentShortcut(
+  event: KeyboardEvent,
+  shortcut: string | undefined,
+) {
+  if (isEditableTarget(event.target)) {
+    return false;
+  }
+
+  return buildShortcutFromEvent(event) === normalizeAgentShortcut(shortcut);
 }
 
 function isEditableTarget(target: EventTarget | null) {
@@ -678,6 +713,10 @@ function normalizeSettings(
       typeof settings?.showTitle === "boolean"
         ? settings.showTitle
         : DEFAULT_SETTINGS.showTitle,
+    keepExpanded:
+      typeof settings?.keepExpanded === "boolean"
+        ? settings.keepExpanded
+        : DEFAULT_SETTINGS.keepExpanded,
     carryOverIncompleteTodos:
       typeof settings?.carryOverIncompleteTodos === "boolean"
         ? settings.carryOverIncompleteTodos
@@ -945,7 +984,9 @@ function IslandShell({
   agentVisualState,
   agentStatusLabel,
   agentLightInstances,
+  keepExpanded,
   onOpenPage,
+  onKeepExpandedChange,
   onCollapse,
   onMinimize,
   onTuck,
@@ -1252,6 +1293,25 @@ function IslandShell({
 
           <div className="window-actions">
             <button
+              className={[
+                "icon-button",
+                keepExpanded ? "icon-button--active" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              type="button"
+              title={keepExpanded ? "取消保持展开" : "保持展开"}
+              aria-label={keepExpanded ? "取消保持展开" : "保持展开"}
+              aria-pressed={keepExpanded}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onKeepExpandedChange(!keepExpanded);
+              }}
+            >
+              <Pin size={16} strokeWidth={2.2} />
+            </button>
+            <button
               className="icon-button"
               type="button"
               title="收起"
@@ -1489,6 +1549,8 @@ function NumberControl({
 function LayoutEditor({
   settings,
   clipboardSettings,
+  clipboardShortcutRegistered,
+  agentShortcutRegistered,
   saveDirectoryDraft,
   savePathState,
   highlightSavePath,
@@ -1518,6 +1580,8 @@ function LayoutEditor({
 }: {
   settings: IslandSettings;
   clipboardSettings: ClipboardHistorySettings;
+  clipboardShortcutRegistered: boolean;
+  agentShortcutRegistered: boolean;
   saveDirectoryDraft: string;
   savePathState: SavePathState;
   highlightSavePath: boolean;
@@ -1552,9 +1616,16 @@ function LayoutEditor({
   const savePathInputRef = useRef<HTMLInputElement | null>(null);
   const clipboardShortcutPanelRef = useRef<HTMLElement | null>(null);
   const clipboardShortcutButtonRef = useRef<HTMLButtonElement | null>(null);
+  const agentShortcutButtonRef = useRef<HTMLButtonElement | null>(null);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetNameDraft, setPresetNameDraft] = useState("");
   const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
+  const [isRecordingAgentShortcut, setIsRecordingAgentShortcut] =
+    useState(false);
+  const [shortcutError, setShortcutError] = useState<{
+    target: "clipboard" | "agent";
+    message: string;
+  } | null>(null);
 
   const startPresetRename = useCallback((preset: IslandPreset) => {
     setEditingPresetId(preset.id);
@@ -1624,6 +1695,7 @@ function LayoutEditor({
 
       if (event.key === "Escape") {
         setIsRecordingShortcut(false);
+        setShortcutError(null);
         return;
       }
 
@@ -1633,13 +1705,67 @@ function LayoutEditor({
         return;
       }
 
+      if (shortcut === normalizeAgentShortcut(clipboardSettings.agentShortcut)) {
+        setShortcutError({
+          target: "clipboard",
+          message: "该组合键已用于 Agent 面板",
+        });
+        setIsRecordingShortcut(false);
+        return;
+      }
+
       onClipboardSettingsChange({
         ...clipboardSettings,
         shortcut,
       });
+      setShortcutError(null);
       setIsRecordingShortcut(false);
     },
     [clipboardSettings, isRecordingShortcut, onClipboardSettingsChange],
+  );
+
+  const handleAgentShortcutKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (!isRecordingAgentShortcut) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        setIsRecordingAgentShortcut(false);
+        setShortcutError(null);
+        return;
+      }
+
+      const shortcut = buildShortcutFromEvent(event.nativeEvent);
+
+      if (!shortcut) {
+        return;
+      }
+
+      if (shortcut === normalizeClipboardShortcut(clipboardSettings.shortcut)) {
+        setShortcutError({
+          target: "agent",
+          message: "该组合键已用于剪贴板历史",
+        });
+        setIsRecordingAgentShortcut(false);
+        return;
+      }
+
+      onClipboardSettingsChange({
+        ...clipboardSettings,
+        agentShortcut: shortcut,
+      });
+      setShortcutError(null);
+      setIsRecordingAgentShortcut(false);
+    },
+    [
+      clipboardSettings,
+      isRecordingAgentShortcut,
+      onClipboardSettingsChange,
+    ],
   );
 
   const agentStatusRows = getAgentLightInstances(
@@ -1789,6 +1915,47 @@ function LayoutEditor({
             onSettingsChange({ ...settings, agentCompletedRetentionMinutes })
           }
         />
+        <div className="shortcut-control">
+          <div className="shortcut-control__meta">
+            <span>Agent 面板快捷键</span>
+            <strong>
+              {normalizeAgentShortcut(clipboardSettings.agentShortcut)}
+            </strong>
+          </div>
+          <button
+            ref={agentShortcutButtonRef}
+            className={[
+              "shortcut-record-button",
+              isRecordingAgentShortcut
+                ? "shortcut-record-button--recording"
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            type="button"
+            onClick={() => {
+              setShortcutError(null);
+              setIsRecordingAgentShortcut(true);
+            }}
+            onKeyDown={handleAgentShortcutKeyDown}
+            onBlur={() => setIsRecordingAgentShortcut(false)}
+          >
+            <Keyboard size={14} strokeWidth={2.3} />
+            <span>
+              {isRecordingAgentShortcut
+                ? "按下组合键"
+                : normalizeAgentShortcut(clipboardSettings.agentShortcut)}
+            </span>
+          </button>
+        </div>
+        {shortcutError?.target === "agent" ? (
+          <div className="shortcut-control__error">{shortcutError.message}</div>
+        ) : null}
+        {!agentShortcutRegistered ? (
+          <div className="shortcut-control__error">
+            系统未能注册此快捷键，可能已被其他程序占用
+          </div>
+        ) : null}
 
         <div
           className={[
@@ -1909,7 +2076,10 @@ function LayoutEditor({
               .filter(Boolean)
               .join(" ")}
             type="button"
-            onClick={() => setIsRecordingShortcut(true)}
+            onClick={() => {
+              setShortcutError(null);
+              setIsRecordingShortcut(true);
+            }}
             onKeyDown={handleShortcutKeyDown}
             onBlur={() => setIsRecordingShortcut(false)}
           >
@@ -1921,6 +2091,14 @@ function LayoutEditor({
             </span>
           </button>
         </div>
+        {shortcutError?.target === "clipboard" ? (
+          <div className="shortcut-control__error">{shortcutError.message}</div>
+        ) : null}
+        {!clipboardShortcutRegistered ? (
+          <div className="shortcut-control__error">
+            系统未能注册此快捷键，可能已被其他程序占用
+          </div>
+        ) : null}
       </section>
 
       <section className="settings-section settings-section--colors">
@@ -3441,6 +3619,7 @@ function App() {
   const [focusClipboardShortcutToken, setFocusClipboardShortcutToken] =
     useState(0);
   const clipboardShortcutToggleAt = useRef(0);
+  const agentShortcutToggleAt = useRef(0);
   const shouldInitializeDefaultSaveDirectory = useRef(
     window.localStorage.getItem(TODO_SAVE_DIRECTORY_STORAGE_KEY) === null,
   );
@@ -3802,6 +3981,23 @@ function App() {
 
     openClipboardHistory();
   }, [mode, openClipboardHistory, page, setIslandMode]);
+
+  const toggleAgentPanel = useCallback(() => {
+    const now = Date.now();
+
+    if (now - agentShortcutToggleAt.current < 250) {
+      return;
+    }
+
+    agentShortcutToggleAt.current = now;
+
+    if (mode === "expanded" && page === "agent") {
+      setIslandMode("collapsed");
+      return;
+    }
+
+    openIslandPage("agent");
+  }, [mode, openIslandPage, page, setIslandMode]);
 
   const clearClipboardShortcutFocus = useCallback(() => {
     setFocusClipboardShortcutToken(0);
@@ -4334,12 +4530,19 @@ function App() {
 
     let unlistenChanges: (() => void) | null = null;
     let unlistenShortcut: (() => void) | null = null;
+    let unlistenAgentShortcut: (() => void) | null = null;
+    let disposed = false;
 
     void listen("clipboard-history-changed", () => {
       void refreshClipboardHistory();
     })
       .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
         unlistenChanges = nextUnlisten;
+        void refreshClipboardHistory();
       })
       .catch((error) => {
         console.error("Failed to listen for clipboard history changes", error);
@@ -4349,17 +4552,37 @@ function App() {
       toggleClipboardHistory();
     })
       .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
         unlistenShortcut = nextUnlisten;
       })
       .catch((error) => {
         console.error("Failed to listen for clipboard history shortcut", error);
       });
 
+    void listen("agent-panel-shortcut", () => {
+      toggleAgentPanel();
+    })
+      .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
+        unlistenAgentShortcut = nextUnlisten;
+      })
+      .catch((error) => {
+        console.error("Failed to listen for Agent panel shortcut", error);
+      });
+
     return () => {
+      disposed = true;
       unlistenChanges?.();
       unlistenShortcut?.();
+      unlistenAgentShortcut?.();
     };
-  }, [refreshClipboardHistory, toggleClipboardHistory]);
+  }, [refreshClipboardHistory, toggleAgentPanel, toggleClipboardHistory]);
 
   useEffect(() => {
     void refreshMediaState();
@@ -4603,6 +4826,17 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        matchesAgentShortcut(
+          event,
+          clipboardHistory.settings.agentShortcut,
+        )
+      ) {
+        event.preventDefault();
+        toggleAgentPanel();
+        return;
+      }
+
       if (matchesClipboardShortcut(event, clipboardHistory.settings.shortcut)) {
         event.preventDefault();
         toggleClipboardHistory();
@@ -4616,18 +4850,29 @@ function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [clipboardHistory.settings.shortcut, collapseIsland, toggleClipboardHistory]);
+  }, [
+    clipboardHistory.settings.agentShortcut,
+    clipboardHistory.settings.shortcut,
+    collapseIsland,
+    toggleAgentPanel,
+    toggleClipboardHistory,
+  ]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let disposed = false;
 
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
-        if (!focused && mode === "expanded") {
+        if (!focused && mode === "expanded" && !settings.keepExpanded) {
           collapseIsland();
         }
       })
       .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
         unlisten = nextUnlisten;
       })
       .catch((error) => {
@@ -4635,9 +4880,10 @@ function App() {
       });
 
     return () => {
+      disposed = true;
       unlisten?.();
     };
-  }, [collapseIsland, mode]);
+  }, [collapseIsland, mode, settings.keepExpanded]);
 
   const activeTaskTitle = useMemo(() => {
     const activeTodo = todos.find(
@@ -4676,7 +4922,14 @@ function App() {
         agentVisualState={agentVisualState}
         agentStatusLabel={agentStatusLabel}
         agentLightInstances={agentLightInstances}
+        keepExpanded={settings.keepExpanded}
         onOpenPage={openIslandPage}
+        onKeepExpandedChange={(keepExpanded) =>
+          setSettings((currentSettings) => ({
+            ...currentSettings,
+            keepExpanded,
+          }))
+        }
         onCollapse={collapseIsland}
         onMinimize={minimizeIsland}
         onTuck={tuckIsland}
@@ -4690,6 +4943,10 @@ function App() {
           <LayoutEditor
             settings={settings}
             clipboardSettings={clipboardHistory.settings}
+            clipboardShortcutRegistered={
+              clipboardHistory.clipboardShortcutRegistered
+            }
+            agentShortcutRegistered={clipboardHistory.agentShortcutRegistered}
             saveDirectoryDraft={saveDirectoryDraft}
             savePathState={savePathState}
             highlightSavePath={saveState === "needs-path"}
@@ -4812,4 +5069,8 @@ export default App;
 编号3：新增/修改
 主要修改内容：Agent 卡片新增 Codex 自动对话标题展示，并保持同一 session_id 在中断、继续和长任务期间复用同一实例灯。
 修改目的：便于区分并发对话，避免继续对话生成重复灯或把长时间运行误判为异常。
+
+编号4：新增/修改
+主要修改内容：新增持久化的保持展开图钉；增加默认 Ctrl+Q 的可配置 Agent 全局快捷键；显示系统热键占用提示并安全清理异步监听。
+修改目的：允许用户在切换到其他窗口时保持面板展开，并从任意应用快速打开或收起 Agent 面板。
 */

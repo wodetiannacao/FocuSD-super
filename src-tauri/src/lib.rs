@@ -99,7 +99,7 @@ fn lock_agent_status_mutex() -> Result<AgentStatusMutexGuard, String> {
 const FOCUSD_AGENT_HOOK_BLOCK_BEGIN: &str = "# BEGIN FocuSD Agent Status Hooks";
 const FOCUSD_AGENT_HOOK_BLOCK_END: &str = "# END FocuSD Agent Status Hooks";
 // Codex 配置使用注释保存 Hook 版本，启动时可据此把旧版内联命令升级到短 cmd 入口。
-const FOCUSD_AGENT_HOOK_VERSION_MARKER: &str = "# FocuSD Agent Status Hooks Version: 2";
+const FOCUSD_AGENT_HOOK_VERSION_MARKER: &str = "# FocuSD Agent Status Hooks Version: 3";
 const FOCUSD_AGENT_HOOK_SIGNATURE: &str = "focusd-agent-";
 const AGENT_RUNNING_SCRIPT: &str = include_str!("../../scripts/focusd-agent-running.cmd");
 const AGENT_HOOK_SCRIPT: &str = include_str!("../../scripts/focusd-agent-hook.cmd");
@@ -107,7 +107,7 @@ const AGENT_STATUS_SCRIPT: &str = include_str!("../../scripts/focusd-agent-statu
 
 static WINDOW_STATE: OnceLock<Mutex<IslandWindowState>> = OnceLock::new();
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum IslandMode {
     Collapsed,
     Expanded,
@@ -344,10 +344,39 @@ fn set_island_interaction(
 ) -> Result<(), String> {
     let window = main_window(&app)?;
     let mode = IslandMode::from_value(&mode)?;
+    let previous_state = read_window_state();
+    let is_expanding = previous_state.mode == IslandMode::Collapsed && mode == IslandMode::Expanded;
+    let position_to_preserve = if is_expanding {
+        window.outer_position().ok().and_then(|position| {
+            let position = if previous_state.use_free_position && previous_state.is_tucked {
+                PhysicalPosition::new(position.x, previous_state.free_y)
+            } else {
+                position
+            };
+
+            if previous_state.use_free_position {
+                return Some(position);
+            }
+
+            centered_top_position(&window, previous_state)
+                .map(|expected| {
+                    (position.x - expected.0).abs() > 2 || (position.y - expected.1).abs() > 2
+                })
+                .unwrap_or(false)
+                .then_some(position)
+        })
+    } else {
+        None
+    };
     let state = mutate_window_state(|state| {
         state.mode = mode;
         state.is_tucked = is_tucked.unwrap_or(false);
         state.size_scale = size_scale.clamp(0.75, 1.4);
+        if let Some(position) = position_to_preserve {
+            state.use_free_position = true;
+            state.free_x = position.x;
+            state.free_y = position.y;
+        }
         if let Some(margin_y) = margin_y {
             state.margin_y = margin_y.clamp(0.0, 160.0);
         }
@@ -359,6 +388,9 @@ fn set_island_interaction(
         }
         *state
     });
+    if position_to_preserve.is_some() {
+        persist_island_position(&app, &state)?;
+    }
     apply_stage_geometry(&window, state)
 }
 
@@ -674,19 +706,80 @@ fn install_agent_status_hooks(app: AppHandle) -> Result<AgentHooksInstallResult,
 fn managed_codex_hook_has_current_entry(content: &str) -> bool {
     // Codex 使用独立的 TOML 管理块。版本标记可以确保旧版内联 PowerShell
     // 或未带版本标记的过渡版本在新程序启动时被确定性地重写。
-    content.contains(FOCUSD_AGENT_HOOK_BLOCK_BEGIN)
-        && content.contains(FOCUSD_AGENT_HOOK_VERSION_MARKER)
-        && content.contains(AGENT_HOOK_SCRIPT_FILE_NAME)
-        && content.contains("cmd.exe /d /s /c")
+    if content.matches(FOCUSD_AGENT_HOOK_BLOCK_BEGIN).count() != 1
+        || content.matches(FOCUSD_AGENT_HOOK_BLOCK_END).count() != 1
+    {
+        return false;
+    }
+
+    let Some(block_start) = content.find(FOCUSD_AGENT_HOOK_BLOCK_BEGIN) else {
+        return false;
+    };
+    let managed_content = &content[block_start..];
+    let Some(block_end) = managed_content.find(FOCUSD_AGENT_HOOK_BLOCK_END) else {
+        return false;
+    };
+    let managed_block = &managed_content[..block_end + FOCUSD_AGENT_HOOK_BLOCK_END.len()];
+
+    managed_block.contains(FOCUSD_AGENT_HOOK_VERSION_MARKER)
+        && managed_block.contains(AGENT_HOOK_SCRIPT_FILE_NAME)
+        && managed_block.contains("cmd.exe /d /s /c")
+        && managed_block.contains("%APPDATA%")
+        && managed_block.contains("call")
 }
 
 fn managed_claude_hook_has_current_entry(content: &str) -> bool {
-    // Claude settings.json 会把 command 和 args 分成不同字段，因此按整个
-    // JSON 文本检查短脚本、FocuSD 标记和 cmd.exe 启动器，不要求它们同一行。
-    content.contains(AGENT_HOOK_SCRIPT_FILE_NAME)
-        && content.contains(FOCUSD_AGENT_HOOK_SIGNATURE)
-        && content.contains("\"command\": \"cmd.exe\"")
+    let Ok(config) = serde_json::from_str::<Value>(content) else {
+        return false;
+    };
+    let Some(hooks) = config.get("hooks").and_then(Value::as_object) else {
+        return false;
+    };
+
+    ["UserPromptSubmit", "PreToolUse", "Stop", "StopFailure"]
+        .iter()
+        .all(|event_name| {
+            hooks
+                .get(*event_name)
+                .and_then(Value::as_array)
+                .is_some_and(|entries| {
+                    entries.iter().any(|entry| {
+                        value_contains_text(entry, FOCUSD_AGENT_HOOK_SIGNATURE)
+                            && value_contains_text(entry, AGENT_HOOK_SCRIPT_FILE_NAME)
+                            && value_contains_text(entry, "%APPDATA%")
+                            && value_contains_text(entry, "call")
+                            && value_contains_exact_text(entry, "cmd.exe")
+                    })
+                })
+        })
 }
+
+fn value_contains_text(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(text) => text.contains(needle),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_contains_text(value, needle)),
+        Value::Object(values) => values
+            .values()
+            .any(|value| value_contains_text(value, needle)),
+        _ => false,
+    }
+}
+
+fn value_contains_exact_text(value: &Value, expected: &str) -> bool {
+    match value {
+        Value::String(text) => text == expected,
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_contains_exact_text(value, expected)),
+        Value::Object(values) => values
+            .values()
+            .any(|value| value_contains_exact_text(value, expected)),
+        _ => false,
+    }
+}
+
 fn refresh_agent_status_hooks_if_installed(app: AppHandle) -> Result<(), String> {
     let app_dir = app
         .path()
@@ -1533,13 +1626,35 @@ fn is_codex_nested_hook_header_for(header: &str, hook_path: &str) -> bool {
     header == format!("[[{hook_path}.hooks]]")
 }
 
-fn agent_hook_command_argument(script_path: &Path, provider: &str, phase: &str) -> String {
+fn agent_hook_command_path_with_appdata(script_path: &Path, appdata_dir: Option<&Path>) -> String {
+    if let Some(appdata_dir) = appdata_dir {
+        if let Ok(relative_path) = script_path.strip_prefix(appdata_dir) {
+            if !relative_path.as_os_str().is_empty() {
+                return format!(r"%APPDATA%\{}", relative_path.to_string_lossy());
+            }
+        }
+    }
+
+    script_path.to_string_lossy().to_string()
+}
+
+fn agent_hook_command_argument_with_appdata(
+    script_path: &Path,
+    provider: &str,
+    phase: &str,
+    appdata_dir: Option<&Path>,
+) -> String {
     format!(
-        "\"\"{}\" {} {}\"",
-        script_path.to_string_lossy(),
+        "call \"{}\" {} {}",
+        agent_hook_command_path_with_appdata(script_path, appdata_dir),
         provider,
         phase
     )
+}
+
+fn agent_hook_command_argument(script_path: &Path, provider: &str, phase: &str) -> String {
+    let appdata_dir = env::var_os("APPDATA").map(PathBuf::from);
+    agent_hook_command_argument_with_appdata(script_path, provider, phase, appdata_dir.as_deref())
 }
 
 fn agent_hook_command(script_path: &Path, provider: &str, phase: &str) -> String {
@@ -2011,6 +2126,7 @@ mod tests {
         assert!(codex_command.contains("codex"));
         assert!(codex_command.contains("running"));
         assert!(codex_command.contains("cmd.exe /d /s /c"));
+        assert!(codex_command.contains("call"));
 
         let claude_entry = claude_code_status_hook_entry(script_path, "running");
         assert_eq!(
@@ -2029,14 +2145,71 @@ mod tests {
         assert!(command.contains("focusd-agent-hook.cmd"));
         assert!(command.contains("claudeCode"));
         assert!(command.contains("running"));
+        assert!(command.starts_with("call "));
+    }
+
+    #[test]
+    fn generated_hook_command_avoids_unicode_user_profile_path() {
+        let appdata_dir = Path::new(r"C:\Users\测试用户\AppData\Roaming");
+        let script_path = appdata_dir
+            .join("com.focusd.island")
+            .join(AGENT_HOOK_SCRIPT_FILE_NAME);
+        let command = agent_hook_command_argument_with_appdata(
+            &script_path,
+            "claudeCode",
+            "completed",
+            Some(appdata_dir),
+        );
+
+        assert_eq!(
+            command,
+            r#"call "%APPDATA%\com.focusd.island\focusd-agent-hook.cmd" claudeCode completed"#
+        );
+        assert!(!command.contains("测试用户"));
     }
 
     #[test]
     fn generated_codex_hooks_include_upgrade_version_marker() {
-        let block = build_codex_hook_block(Path::new(r"C:\FocuSD\focusd-agent-hook.cmd"));
+        let appdata_dir = env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .expect("APPDATA should be available on Windows");
+        let script_path = appdata_dir
+            .join("com.focusd.island")
+            .join(AGENT_HOOK_SCRIPT_FILE_NAME);
+        let block = build_codex_hook_block(&script_path);
         assert!(block.contains(FOCUSD_AGENT_HOOK_VERSION_MARKER));
         assert!(block.contains(AGENT_HOOK_SCRIPT_FILE_NAME));
+        assert!(block.contains("%APPDATA%"));
         assert!(managed_codex_hook_has_current_entry(&block));
+    }
+
+    #[test]
+    fn generated_claude_hooks_are_detected_per_event() {
+        let appdata_dir = env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .expect("APPDATA should be available on Windows");
+        let script_path = appdata_dir
+            .join("com.focusd.island")
+            .join(AGENT_HOOK_SCRIPT_FILE_NAME);
+        let config = json!({
+            "hooks": {
+                "UserPromptSubmit": [claude_code_running_hook_entry(&script_path)],
+                "PreToolUse": [
+                    claude_code_match_all_hook_entry(
+                        claude_code_running_hook_entry(&script_path)
+                    )
+                ],
+                "Stop": [
+                    claude_code_status_hook_entry(&script_path, "completed")
+                ],
+                "StopFailure": [
+                    claude_code_status_hook_entry(&script_path, "failed")
+                ]
+            }
+        });
+        let content = serde_json::to_string_pretty(&config).unwrap();
+
+        assert!(managed_claude_hook_has_current_entry(&content));
     }
 
     #[test]
@@ -2046,6 +2219,9 @@ mod tests {
 command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ConvertFrom-Json"
 command = "C:\Users\Test\focusd-agent-status.ps1"
 # END FocuSD Agent Status Hooks
+
+# FocuSD Agent Status Hooks Version: 3
+# unrelated text: cmd.exe /d /s /c call "%APPDATA%\focusd-agent-hook.cmd"
 "#;
 
         assert!(!managed_codex_hook_has_current_entry(legacy));
@@ -2163,4 +2339,9 @@ pub fn run() {
 
 编号9：修复
 主要修改内容：Hook 配置生成统一传入 focusd-agent-hook.cmd，不再把 status.ps1 直接写入 Codex/Claude Hook 命令；增加实际生成路径断言。
-修改目的：修复安装后 Hook 仍直接执行 PowerShell 状态脚本导致的 code 1，确保宿主先经过可容错的统一入口解析 stdin。*/
+修改目的：修复安装后 Hook 仍直接执行 PowerShell 状态脚本导致的 code 1，确保宿主先经过可容错的统一入口解析 stdin。
+
+编号10：新增/修改
+主要修改内容：Hook 命令改用 %APPDATA% 纯 ASCII 路径与 cmd call；Hook 版本升级为3并按受管块/事件精确识别；展开时保存真实窗口坐标并排除顶部收起的临时负坐标。
+修改目的：兼容中文 Windows 用户名，自动升级旧 Hook，并确保悬浮岛在拖动位置原地展开。
+*/
