@@ -2634,6 +2634,14 @@ input {
   gap: 12px;
 }
 
+.shortcut-cycle-hint {
+  margin: 0;
+  color: rgba(248, 246, 240, 0.58);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .shortcut-control__meta {
   min-width: 0;
   display: grid;
@@ -2659,6 +2667,10 @@ input {
   font-size: 11px;
   font-weight: 750;
   line-height: 1.35;
+}
+
+.shortcut-control__error--full {
+  grid-column: 1 / -1;
 }
 
 .shortcut-record-button {
@@ -3131,4 +3143,8 @@ input {
 编号4：新增/修改
 主要修改内容：新增保持展开图钉的激活态，以及快捷键冲突提示样式。
 修改目的：让锁定状态清晰可见，并在 Agent 与剪贴板快捷键冲突时提供直接反馈。
+
+编号5：新增/修改
+主要修改内容：新增页面快捷键轮换说明样式，并让快捷键注册失败提示横跨整行显示。
+修改目的：清晰说明 Agent、音乐、待办、剪贴板共用快捷键时的轮换规则，并提升错误提示可读性。
 */

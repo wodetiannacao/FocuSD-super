@@ -83,7 +83,7 @@ When a turn finishes, `focusd-agent-status.ps1`:
 Legacy single-object files (`codex` / `claudeCode`) and legacy markers
 (`agent-codex-running.flag`) are still read for compatibility.
 
-A running marker older than 10 minutes becomes `stale` (yellow).
+Running markers remain `running` until the matching completion/failure Hook removes them, so long tasks are not marked stale by elapsed time alone.
 
 ## Manual Smoke Test
 
@@ -106,7 +106,7 @@ Expected:
 ## Notes
 
 - Prefer the in-app installer.
-- On Windows Claude Code hooks, prefer exec form with `cmd.exe` / `powershell.exe` + `args`.
+- On Windows, Codex and Claude Code use a short `powershell.exe -NoProfile -Command` launcher.
 - After upgrading multi-instance support, reinstall hooks once and re-trust Codex hooks.
-- Hook commands use `%APPDATA%` instead of embedding the absolute user-profile
-  path, so Chinese Windows user names are not corrupted by terminal code pages.
+- Hook v4 builds the script path with `$env:APPDATA`, `Join-Path`, and `-LiteralPath`
+  instead of embedding the absolute user-profile path, so Chinese Windows user names remain Unicode-safe in Codex and Claude Code terminals.

@@ -63,9 +63,9 @@ FocuSD super 是一个 Windows 优先的桌面效率工具。它以透明、无�
 | AI Agent 状态 | 同时支持 Codex 与 Claude Code 的运行、完成、失败和过期状态。 |
 | 多实例状态灯 | 多个 Agent 会话分别显示为 codex(1)、codex(2)、claude(1) 等独立状态。 |
 | Hook 自动安装/升级 | 自动写入 app-data 脚本，修复旧版内联 Hook，并兼容旧状态文件和旧 marker。 |
-| 中文路径 Hook | Hook 使用 `%APPDATA%` 纯 ASCII 命令入口，兼容中文 Windows 用户名。 |
+| 中文路径 Hook | Codex/Claude Code 统一使用 PowerShell Unicode 启动器，通过 `$env:APPDATA` 和 `Join-Path` 定位脚本，兼容中文 Windows 用户名。 |
 | Agent 状态面板 | 查看会话、提供商、阶段和 Codex 会话标题，并可单独清除状态。 |
-| Agent 快捷键 | 默认使用 `Ctrl+Q` 全局打开或收起 Agent 面板，并可在设置中修改。 |
+| 页面快捷键 | Agent、音乐、待办、剪贴板均支持可配置全局快捷键；多个页面可共用同一组合键并依次轮换。 |
 | 剪切板历史 | 记录文本和图片剪切板内容，支持收藏、复制、删除和清空。 |
 | 媒体控制 | 查看系统音频状态，控制播放/暂停、上一首、下一首。 |
 | 自由定位 | 支持将悬浮岛拖动到自定义位置，并持久化窗口位置。 |
@@ -81,15 +81,15 @@ FocuSD super 是一个 Windows 优先的桌面效率工具。它以透明、无�
 | --- | --- | --- |
 | Agent 状态模型 | 从单一 Codex 状态扩展为 Codex/Claude Code 多实例 instances 模型 | 多个窗口同时运行时不会互相覆盖状态 |
 | 会话识别 | 使用 session_id 和 turn_id 配对运行事件 | 中断后继续对话不会生成重复灯或幽灵状态 |
-| Hook 入口 | 新增统一 focusd-agent-hook.cmd，集中解析 stdin 并转发状态 | 避免长段内联 PowerShell 在 Codex 中退出码异常 |
+| Hook 入口 | 使用短 PowerShell Unicode 启动器定位统一 focusd-agent-hook.cmd，再集中解析 stdin 并转发状态 | 避免长段内联命令异常，同时兼容中文用户目录 |
 | Hook 升级 | 检测旧版 Hook，自动重写为当前 app-data 脚本路径 | 安装新版后无需手动编辑旧配置 |
-| 中文路径兼容 | Hook 配置改用 `%APPDATA%` 和 `cmd call` | 中文用户名不再被终端代码页转换为乱码 |
+| 中文路径兼容 | Hook v4 使用 `$env:APPDATA`、`Join-Path` 与 `-LiteralPath` 构造 Unicode 路径 | Claude Code 与 Codex 在中文用户名环境下均可稳定调用 Hook |
 | Hook 兼容 | 兼容旧版单对象状态文件、旧 marker 和旧配置 | 升级时尽量保留已有用户状态 |
 | 状态展示 | 增加完成保留时间、失败/过期提醒、单实例清除 | 可以区分已完成、仍运行和需要处理的会话 |
 | Codex 信息 | 按 session_id 读取 Codex 会话标题 | Agent 面板中能看到更明确的任务名称 |
 | 窗口布局 | 增加自由定位和位置持久化 | 悬浮岛不再只能固定在顶部居中 |
 | 展开交互 | 展开前捕获真实窗口坐标，并支持图钉保持展开 | 在拖动位置原地展开，点击其他窗口时可保持面板 |
-| 快捷键 | 新增可配置 Agent 全局快捷键，默认 `Ctrl+Q` | 可从任意应用快速打开或收起 Agent 面板 |
+| 快捷键 | 新增 Agent、音乐、待办、剪贴板四类全局快捷键，并允许同键绑定多个页面 | 同键按 Agent → Music → Todo → Clipboard → 收缩的顺序循环 |
 | 工程质量 | 增加多实例 Hook 集成测试、PowerShell 解析检查和构建验证 | 后续升级 Hook 时有回归保护 |
 
 ## AI Agent 状态指示灯
@@ -98,7 +98,7 @@ FocuSD super 是一个 Windows 优先的桌面效率工具。它以透明、无�
 
 - 红色：会话正在运行。
 - 绿色：会话已完成或当前没有活动任务。
-- 黄色：会话失败、可能中断，或运行 marker 超过 10 分钟未结束。
+- 黄色：会话失败、可能中断，或历史配置留下了需要清理的过期状态。
 - 多个灯：表示多个 Agent 会话正在同时运行。
 
 ### Hook 安装与配置
@@ -121,7 +121,7 @@ FocuSD super 是一个 Windows 优先的桌面效率工具。它以透明、无�
 
 ### Claude Code
 
-Claude Code 使用 Windows exec 形式调用 cmd.exe，并通过 args 传递参数，适合 VSCode 终端和不同 Shell 环境。安装器会同时写入：
+Claude Code 使用 Windows exec 形式调用 `powershell.exe`，通过 `-NoProfile -Command` 和 Unicode 路径构造定位 Hook，适合 VSCode 终端、Codex 终端及中文 Windows 用户目录。安装器会同时写入：
 
 %USERPROFILE%\.claude\settings.json
 
@@ -249,6 +249,19 @@ pnpm dev
 - 开启剪切板历史后，应用会记录文本和图片剪切板内容。
 - 每条记录支持收藏、复制、删除。
 - 收藏内容会保留在收藏栏目中，适合保存高频片段。
+
+### 页面快捷键
+
+默认快捷键如下：
+
+| 页面 | 默认快捷键 |
+| --- | --- |
+| Agent | `Ctrl+Q` |
+| 音乐播放器 | `Ctrl+Alt+M` |
+| 待办事项 | `Ctrl+Alt+T` |
+| 剪贴板历史 | `Ctrl+X` |
+
+可以在设置 → 页面快捷键中重新录制组合键。多个页面允许使用同一快捷键；每次按下会按照 `Agent → Music → Todo → Clipboard → 收缩` 的固定顺序，在实际绑定了该组合键的页面之间轮换。
 
 ### AI Agent 状态
 

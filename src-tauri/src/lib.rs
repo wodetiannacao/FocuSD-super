@@ -98,9 +98,10 @@ fn lock_agent_status_mutex() -> Result<AgentStatusMutexGuard, String> {
 }
 const FOCUSD_AGENT_HOOK_BLOCK_BEGIN: &str = "# BEGIN FocuSD Agent Status Hooks";
 const FOCUSD_AGENT_HOOK_BLOCK_END: &str = "# END FocuSD Agent Status Hooks";
-// Codex 配置使用注释保存 Hook 版本，启动时可据此把旧版内联命令升级到短 cmd 入口。
-const FOCUSD_AGENT_HOOK_VERSION_MARKER: &str = "# FocuSD Agent Status Hooks Version: 3";
+// Codex 配置使用注释保存 Hook 版本，启动时可据此把旧版入口升级到 PowerShell Unicode 入口。
+const FOCUSD_AGENT_HOOK_VERSION_MARKER: &str = "# FocuSD Agent Status Hooks Version: 4";
 const FOCUSD_AGENT_HOOK_SIGNATURE: &str = "focusd-agent-";
+const AGENT_HOOK_APPDATA_RELATIVE_PATH: &str = r"com.focusd.island\focusd-agent-hook.cmd";
 const AGENT_RUNNING_SCRIPT: &str = include_str!("../../scripts/focusd-agent-running.cmd");
 const AGENT_HOOK_SCRIPT: &str = include_str!("../../scripts/focusd-agent-hook.cmd");
 const AGENT_STATUS_SCRIPT: &str = include_str!("../../scripts/focusd-agent-status.ps1");
@@ -723,9 +724,9 @@ fn managed_codex_hook_has_current_entry(content: &str) -> bool {
 
     managed_block.contains(FOCUSD_AGENT_HOOK_VERSION_MARKER)
         && managed_block.contains(AGENT_HOOK_SCRIPT_FILE_NAME)
-        && managed_block.contains("cmd.exe /d /s /c")
-        && managed_block.contains("%APPDATA%")
-        && managed_block.contains("call")
+        && managed_block.contains("powershell.exe -NoProfile -Command")
+        && managed_block.contains("$env:APPDATA")
+        && managed_block.contains("Join-Path")
 }
 
 fn managed_claude_hook_has_current_entry(content: &str) -> bool {
@@ -746,9 +747,9 @@ fn managed_claude_hook_has_current_entry(content: &str) -> bool {
                     entries.iter().any(|entry| {
                         value_contains_text(entry, FOCUSD_AGENT_HOOK_SIGNATURE)
                             && value_contains_text(entry, AGENT_HOOK_SCRIPT_FILE_NAME)
-                            && value_contains_text(entry, "%APPDATA%")
-                            && value_contains_text(entry, "call")
-                            && value_contains_exact_text(entry, "cmd.exe")
+                            && value_contains_text(entry, "$env:APPDATA")
+                            && value_contains_text(entry, "Join-Path")
+                            && value_contains_exact_text(entry, "powershell.exe")
                     })
                 })
         })
@@ -1464,14 +1465,13 @@ fn claude_code_running_hook_entry(script_path: &Path) -> Value {
     claude_code_status_hook_entry(script_path, "running")
 }
 
-fn claude_code_status_hook_entry(script_path: &Path, phase: &str) -> Value {
+fn claude_code_status_hook_entry(_script_path: &Path, phase: &str) -> Value {
     claude_code_hook_entry(
-        "cmd.exe",
+        "powershell.exe",
         vec![
-            "/d".to_string(),
-            "/s".to_string(),
-            "/c".to_string(),
-            agent_hook_command_argument(script_path, "claudeCode", phase),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            agent_hook_powershell_script("claudeCode", phase),
         ],
         5,
     )
@@ -1626,41 +1626,17 @@ fn is_codex_nested_hook_header_for(header: &str, hook_path: &str) -> bool {
     header == format!("[[{hook_path}.hooks]]")
 }
 
-fn agent_hook_command_path_with_appdata(script_path: &Path, appdata_dir: Option<&Path>) -> String {
-    if let Some(appdata_dir) = appdata_dir {
-        if let Ok(relative_path) = script_path.strip_prefix(appdata_dir) {
-            if !relative_path.as_os_str().is_empty() {
-                return format!(r"%APPDATA%\{}", relative_path.to_string_lossy());
-            }
-        }
-    }
-
-    script_path.to_string_lossy().to_string()
-}
-
-fn agent_hook_command_argument_with_appdata(
-    script_path: &Path,
-    provider: &str,
-    phase: &str,
-    appdata_dir: Option<&Path>,
-) -> String {
+fn agent_hook_powershell_script(provider: &str, phase: &str) -> String {
     format!(
-        "call \"{}\" {} {}",
-        agent_hook_command_path_with_appdata(script_path, appdata_dir),
-        provider,
-        phase
+        "$hook = Join-Path $env:APPDATA '{}'; if (Test-Path -LiteralPath $hook) {{ & $hook {} {} }}",
+        AGENT_HOOK_APPDATA_RELATIVE_PATH, provider, phase
     )
 }
 
-fn agent_hook_command_argument(script_path: &Path, provider: &str, phase: &str) -> String {
-    let appdata_dir = env::var_os("APPDATA").map(PathBuf::from);
-    agent_hook_command_argument_with_appdata(script_path, provider, phase, appdata_dir.as_deref())
-}
-
-fn agent_hook_command(script_path: &Path, provider: &str, phase: &str) -> String {
+fn agent_hook_command(_script_path: &Path, provider: &str, phase: &str) -> String {
     format!(
-        "cmd.exe /d /s /c {}",
-        agent_hook_command_argument(script_path, provider, phase)
+        "powershell.exe -NoProfile -Command \"{}\"",
+        agent_hook_powershell_script(provider, phase)
     )
 }
 
@@ -2119,53 +2095,56 @@ mod tests {
     }
 
     #[test]
-    fn generated_hooks_use_short_cmd_entry_points() {
+    fn generated_hooks_use_powershell_unicode_entry_points() {
         let script_path = Path::new(r"C:\FocuSD\focusd-agent-hook.cmd");
         let codex_command = agent_hook_command(script_path, "codex", "running");
+        assert!(codex_command.starts_with("powershell.exe -NoProfile -Command"));
         assert!(codex_command.contains("focusd-agent-hook.cmd"));
-        assert!(codex_command.contains("codex"));
-        assert!(codex_command.contains("running"));
-        assert!(codex_command.contains("cmd.exe /d /s /c"));
-        assert!(codex_command.contains("call"));
+        assert!(codex_command.contains("$env:APPDATA"));
+        assert!(codex_command.contains("codex running"));
+        assert!(!codex_command.contains("cmd.exe /d /s /c"));
 
         let claude_entry = claude_code_status_hook_entry(script_path, "running");
         assert_eq!(
             claude_entry["hooks"][0]["command"].as_str(),
-            Some("cmd.exe")
+            Some("powershell.exe")
         );
         let args = claude_entry["hooks"][0]["args"]
             .as_array()
             .expect("Claude hook args should be an array");
-        assert_eq!(args[0].as_str(), Some("/d"));
-        assert_eq!(args[1].as_str(), Some("/s"));
-        assert_eq!(args[2].as_str(), Some("/c"));
-        let command = args[3]
+        assert_eq!(args[0].as_str(), Some("-NoProfile"));
+        assert_eq!(args[1].as_str(), Some("-Command"));
+        let command = args[2]
             .as_str()
-            .expect("Claude hook should include the cmd command string");
+            .expect("Claude hook should include the PowerShell command string");
         assert!(command.contains("focusd-agent-hook.cmd"));
-        assert!(command.contains("claudeCode"));
-        assert!(command.contains("running"));
-        assert!(command.starts_with("call "));
+        assert!(command.contains("$env:APPDATA"));
+        assert!(command.contains("claudeCode running"));
+    }
+
+    #[test]
+    fn hook_script_keeps_redirected_stdin_non_interactive() {
+        let invocation = AGENT_HOOK_SCRIPT
+            .lines()
+            .find(|line| line.starts_with("powershell.exe "))
+            .expect("Hook script should invoke PowerShell");
+
+        assert!(invocation.contains("-NonInteractive"));
+        assert!(AGENT_HOOK_SCRIPT.contains("DisableDelayedExpansion"));
+        assert!(invocation.contains("$env:FOCUSD_STATUS_SCRIPT"));
+        assert!(!invocation.contains("'%STATUS_SCRIPT%'"));
+        assert!(!invocation.contains("-WindowStyle Hidden"));
     }
 
     #[test]
     fn generated_hook_command_avoids_unicode_user_profile_path() {
-        let appdata_dir = Path::new(r"C:\Users\测试用户\AppData\Roaming");
-        let script_path = appdata_dir
-            .join("com.focusd.island")
-            .join(AGENT_HOOK_SCRIPT_FILE_NAME);
-        let command = agent_hook_command_argument_with_appdata(
-            &script_path,
-            "claudeCode",
-            "completed",
-            Some(appdata_dir),
-        );
+        let command = agent_hook_powershell_script("claudeCode", "completed");
 
         assert_eq!(
             command,
-            r#"call "%APPDATA%\com.focusd.island\focusd-agent-hook.cmd" claudeCode completed"#
+            "$hook = Join-Path $env:APPDATA 'com.focusd.island\\focusd-agent-hook.cmd'; if (Test-Path -LiteralPath $hook) { & $hook claudeCode completed }"
         );
-        assert!(!command.contains("测试用户"));
+        assert!(!command.contains("Users"));
     }
 
     #[test]
@@ -2179,7 +2158,8 @@ mod tests {
         let block = build_codex_hook_block(&script_path);
         assert!(block.contains(FOCUSD_AGENT_HOOK_VERSION_MARKER));
         assert!(block.contains(AGENT_HOOK_SCRIPT_FILE_NAME));
-        assert!(block.contains("%APPDATA%"));
+        assert!(block.contains("$env:APPDATA"));
+        assert!(block.contains("powershell.exe -NoProfile -Command"));
         assert!(managed_codex_hook_has_current_entry(&block));
     }
 
@@ -2325,7 +2305,11 @@ pub fn run() {
 编号4：修改
 主要修改内容：Codex/Claude Hook 顶层按 UTF-8 解析 stdin，将安全化 instanceId 与 turn_id 按既有位置参数传入；旧 Hook 按 Provider 自动升级并清理 marker。
 修改目的：规避 Windows PowerShell stdin 编码与脚本参数绑定差异，彻底避免随机实例 ID、重复灯和幽灵红灯。
-\n编号5：新增/修改\n主要修改内容：清除状态与 Hook 共用命名互斥锁；Codex 标题索引按文件修改时间缓存；Hook 升级判断仅认可包含 FocuSD 标记和 -HookResponse 的行。\n修改目的：消除清除竞态，降低标题刷新开销，并避免无关 Hook 误阻止旧 FocuSD Hook 升级。\n
+
+编号5：新增/修改
+主要修改内容：清除状态与 Hook 共用命名互斥锁；Codex 标题索引按文件修改时间缓存；Hook 升级判断仅认可包含 FocuSD 标记和 -HookResponse 的行。
+修改目的：消除清除竞态，降低标题刷新开销，并避免无关 Hook 误阻止旧 FocuSD Hook 升级。
+
 编号6：新增/修改
 主要修改内容：新增统一 focusd-agent-hook.cmd，Codex/Claude Hook 改为调用短 cmd 命令；Hook 不再输出内联 HookResponse JSON。
 修改目的：规避 Codex 宿主执行长段内联 PowerShell 时的兼容性错误，保持 session_id、turn_id、多 Agent 和完成状态逻辑不变。
@@ -2342,6 +2326,6 @@ pub fn run() {
 修改目的：修复安装后 Hook 仍直接执行 PowerShell 状态脚本导致的 code 1，确保宿主先经过可容错的统一入口解析 stdin。
 
 编号10：新增/修改
-主要修改内容：Hook 命令改用 %APPDATA% 纯 ASCII 路径与 cmd call；Hook 版本升级为3并按受管块/事件精确识别；展开时保存真实窗口坐标并排除顶部收起的临时负坐标。
+主要修改内容：Hook 命令升级为 PowerShell Unicode 路径构造；Hook 版本升级为4并自动替换 cmd v3 入口；展开时保存真实窗口坐标并排除顶部收起的临时负坐标。
 修改目的：兼容中文 Windows 用户名，自动升级旧 Hook，并确保悬浮岛在拖动位置原地展开。
 */
